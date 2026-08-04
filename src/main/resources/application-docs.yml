@@ -1,0 +1,21 @@
+# Swagger 명세만 확인/공유하려는 용도의 프로필. 실제 NCR/Graph 키 발급 전에도 앱을 띄워
+# /swagger-ui.html, /v3/api-docs를 볼 수 있게 자격 증명 @NotBlank 검증만 통과시키는
+# 더미 값을 채우고, 기동 시 NCR 도달성 확인(StartupChecks)을 끈다.
+#
+# 사용법: gradlew bootRun --args='--spring.profiles.active=docs'
+#         (또는 SPRING_PROFILES_ACTIVE=docs 환경변수)
+#
+# 주의: 이 프로필로 뜬 인스턴스는 /api/health/*, 실제 패키징(Job) 관련 기능이 전부 실패한다
+# (더미 값이라 진짜 NCR/Graph에 붙지 않음). API 명세 확인·공유 용도로만 쓸 것.
+deployhub:
+  startup-checks:
+    enabled: false
+  registry:
+    endpoint: placeholder.invalid
+    access-key: placeholder
+    secret-key: placeholder
+  sharepoint:
+    tenant-id: placeholder
+    client-id: placeholder
+    client-secret: placeholder
+    site-id: placeholder

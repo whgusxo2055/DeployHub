@@ -5,6 +5,13 @@ spring:
   application:
     name: deployhub
 
+  # NCR/Graph 호출이 무기한 대기하지 않도록 한다 — 없으면 StartupChecks가 VPC 오설정 시
+  # 무한 대기하고, health endpoint 하나가 워커 스레드를 영구 점유할 수 있다.
+  http:
+    client:
+      connect-timeout: 5s
+      read-timeout: 10s
+
   datasource:
     url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:deployhub}?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Seoul
     username: ${DB_USERNAME:deployhub}
@@ -25,12 +32,39 @@ spring:
     locations: classpath:db/migration
     baseline-on-migrate: true
 
-# Phase 1 범위 설정값. 이후 Phase에서 registry/graph/job 관련 값이 추가된다.
 deployhub:
   work-dir: ${WORK_DIR:/data/deployhub/jobs}
+
+  # 기동 시 NCR 도달성을 확인한다(StartupChecks). 실제 키/네트워크 없이 Swagger만 보려면
+  # `docs` 프로필(application-docs.yml)로 끌 것 — 기본값은 항상 true.
+  startup-checks:
+    enabled: ${STARTUP_CHECKS_ENABLED:true}
   cors:
     # 프론트엔드가 별도 오리진에서 호출한다 (구현계획서 0.3·0.6절). 쉼표로 여러 값 허용.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:*}
+
+  # Phase 2 — FN-04-1 NCP Container Registry. Private Endpoint 전제이므로 패키징 서버가
+  # NCP VPC 내부에 있어야 도달 가능하다 (0.7절).
+  registry:
+    endpoint: ${NCR_ENDPOINT:}
+    access-key: ${NCR_ACCESS_KEY:}
+    secret-key: ${NCR_SECRET_KEY:}
+    cli-path: ${NCR_CLI_PATH:/usr/bin/skopeo}
+
+  # Phase 2 — FN-04-5 Microsoft Graph / SharePoint. SP_DRIVE_ID를 비워두면 사이트의
+  # 기본 문서 라이브러리를 조회해 대신 사용한다.
+  sharepoint:
+    tenant-id: ${GRAPH_TENANT_ID:}
+    client-id: ${GRAPH_CLIENT_ID:}
+    client-secret: ${GRAPH_CLIENT_SECRET:}
+    site-id: ${SP_SITE_ID:}
+    drive-id: ${SP_DRIVE_ID:}
+    root-path: ${SP_ROOT_PATH:/Deploy/Packages}
+
+  # Phase 2 — 이후 모든 외부 호출(NCR·Graph)이 공유하는 재시도 정책 (0.6절).
+  retry:
+    max-retries: ${MAX_RETRY:3}
+    backoff: ${RETRY_BACKOFF:5,15}
 
 springdoc:
   api-docs:
