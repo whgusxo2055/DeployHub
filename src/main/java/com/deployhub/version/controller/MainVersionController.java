@@ -78,7 +78,7 @@ public class MainVersionController {
         return mainVersionService.getDetail(versionName);
     }
 
-    @Operation(summary = "담당 영역별 패키징 가능 여부 확인 (FN-02-1)")
+    @Operation(summary = "메인버전 패키징 가능 여부 확인 (FN-02-1)")
     @ApiResponse(responseCode = "404", description = "E-0101: 메인버전 없음")
     @GetMapping("/api/main-versions/{versionName}/packaging-eligibility")
     public PackagingEligibilityResponse getPackagingEligibility(@PathVariable String versionName) {
