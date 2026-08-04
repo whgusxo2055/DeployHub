@@ -26,6 +26,17 @@ public enum ErrorCode {
     MANIFEST_LOCKED("E-0204", HttpStatus.CONFLICT, "이미 패키징 Job이 진행 중이거나 완료된 메인버전은 수정할 수 없습니다."),
     SUB_VERSION_VALIDATION_FAILED("E-0205", HttpStatus.BAD_REQUEST, "서브버전 요청 값이 올바르지 않습니다."),
 
+    // E-04xx 외부 저장소 연동 (NCR: 0401~0404, Graph: 0451~0453).
+    // E-0403(자격 증명 로드 실패 → 기동 실패)은 여기 없다 — HTTP 응답으로 나가는 코드가
+    // 아니라 NcrProperties/GraphProperties의 @NotBlank 검증이 기동 자체를 막는 방식으로
+    // 대신한다(StartupChecks 참고).
+    REGISTRY_UNAUTHORIZED("E-0401", HttpStatus.UNAUTHORIZED, "레지스트리 인증에 실패했습니다."),
+    REGISTRY_TIMEOUT("E-0402", HttpStatus.GATEWAY_TIMEOUT, "레지스트리 호출이 시간 초과되었습니다."),
+    REGISTRY_UNREACHABLE("E-0404", HttpStatus.BAD_GATEWAY, "NCR Private Endpoint에 연결할 수 없습니다."),
+    GRAPH_TOKEN_ISSUE_FAILED("E-0451", HttpStatus.BAD_GATEWAY, "Microsoft Graph 토큰 발급에 실패했습니다."),
+    GRAPH_FORBIDDEN("E-0452", HttpStatus.FORBIDDEN, "Microsoft Graph 권한이 부족합니다."),
+    GRAPH_UNAVAILABLE("E-0453", HttpStatus.SERVICE_UNAVAILABLE, "Microsoft Graph가 일시적으로 응답하지 않습니다."),
+
     // 어느 도메인 대역에도 속할 수 없는, 예상치 못한 오류에만 쓰는 유일한 예외.
     // 미리 분류할 수 없는 오류이므로 도메인 코드를 억지로 붙이지 않는다.
     INTERNAL_ERROR("E-9000", HttpStatus.INTERNAL_SERVER_ERROR, "서버 내부 오류가 발생했습니다.");
