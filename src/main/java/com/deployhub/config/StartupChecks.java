@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>{@code deployhub.startup-checks.enabled=false}로 끌 수 있다 — 실제 키 발급 전에
  * Swagger 명세만 보려는 경우처럼, NCR에 붙을 수 없는 환경에서 임시로 기동하려는 용도다
- * ({@code docs} 프로필 참고). 기본값은 {@code true}라 운영 동작은 바뀌지 않는다.
+ * ({@code dev} 프로필 참고). 기본값은 {@code true}라 운영 동작은 바뀌지 않는다.
  */
 @Slf4j
 @Component

@@ -1,0 +1,24 @@
+# 실제 NCR/Graph 키 없이도 앱을 띄우는 프로필. 자격 증명 @NotBlank 검증만 통과시키는
+# 더미 값을 채우고, 기동 시 NCR 도달성 확인(StartupChecks)을 끈다.
+#
+# 용도 1 — Swagger 명세만 확인/공유: /swagger-ui.html, /v3/api-docs
+#   사용법: gradlew bootRun --args='--spring.profiles.active=dev'
+#           (또는 SPRING_PROFILES_ACTIVE=dev 환경변수)
+# 용도 2 — MainVersionApiFlowIntegrationTest가 NCR/Graph를 타지 않는 Phase 1 흐름을
+#   검증할 때 전체 컨텍스트를 띄우는 데 재사용한다 — 여기 값을 바꾸면(ddl-auto, flyway
+#   설정 등) 그 테스트도 영향을 받는다.
+#
+# 주의: 이 프로필로 뜬 인스턴스는 /api/health/*, 실제 패키징(Job) 관련 기능이 전부 실패한다
+# (더미 값이라 진짜 NCR/Graph에 붙지 않음). 운영 배포에는 쓰지 말 것.
+deployhub:
+  startup-checks:
+    enabled: false
+  registry:
+    endpoint: placeholder.invalid
+    access-key: placeholder
+    secret-key: placeholder
+  sharepoint:
+    tenant-id: placeholder
+    client-id: placeholder
+    client-secret: placeholder
+    site-id: placeholder

@@ -36,7 +36,7 @@ deployhub:
   work-dir: ${WORK_DIR:/data/deployhub/jobs}
 
   # 기동 시 NCR 도달성을 확인한다(StartupChecks). 실제 키/네트워크 없이 Swagger만 보려면
-  # `docs` 프로필(application-docs.yml)로 끌 것 — 기본값은 항상 true.
+  # `dev` 프로필(application-dev.yml)로 끌 것 — 기본값은 항상 true.
   startup-checks:
     enabled: ${STARTUP_CHECKS_ENABLED:true}
   cors:

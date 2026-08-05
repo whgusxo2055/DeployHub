@@ -24,7 +24,11 @@ import org.springframework.web.client.RestClient;
  * 빠뜨리면 "No default constructor found"로 기동이 죽는다 — 단위 테스트는 이 클래스를 직접
  * {@code new}로 생성하므로 이 실패를 잡지 못한다. 실제로 겪은 문제라 컨텍스트를 띄워
  * Spring의 생성자 선택 자체를 검증한다. DB·Flyway·네트워크 없이도 뜨도록 필요한 빈만 수동
- * 등록한다 (전체 애플리케이션 기동은 실제 NCR/Graph 자격 증명이 있어야 하므로 여기서 하지 않는다).
+ * 등록한다 (전체 애플리케이션 기동은 실제 NCR/Graph 자격 증명이 있어야 하므로 여기서 하지 않는다
+ * — {@code dev} 프로필의 더미 값으로 전체 컨텍스트를 띄우는
+ * {@link com.deployhub.version.MainVersionApiFlowIntegrationTest}가 Docker가 있는
+ * 환경에서 이 빈 와이어링을 사실상 포함해서 검증한다. 이 클래스는 Docker 없이도 도는
+ * 유일한 기동 검증이라 별도로 유지한다).
  */
 class BeanWiringSmokeTest {
 

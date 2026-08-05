@@ -1,0 +1,194 @@
+package com.deployhub.version;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.deployhub.version.dto.ComponentResponse;
+import com.deployhub.version.dto.MainVersionCreateRequest;
+import com.deployhub.version.dto.MainVersionDetailResponse;
+import com.deployhub.version.dto.MainVersionInfoResponse;
+import com.deployhub.version.dto.PackagingEligibilityResponse;
+import com.deployhub.version.dto.SubVersionSavedResponse;
+import com.deployhub.version.dto.SubVersionUpsertBatchRequest;
+import com.deployhub.version.dto.SubVersionUpsertRequest;
+import com.deployhub.version.dto.SubmitStatusChangeRequest;
+import com.deployhub.version.entity.SubmitStatus;
+import java.util.List;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
+import org.testcontainers.containers.MySQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+/**
+ * 이 프로젝트는 프론트엔드가 범위에서 제외된 백엔드 전용 API 서버라 Playwright E2E가
+ * 검증할 화면이 없다 (구현계획서 0.1절). 대신 Phase 1 완료 기준(구현계획서 328-334행)에
+ * 명시된 핵심 흐름들을 실제 MySQL 컨테이너 위에서 HTTP 엔드투엔드로 검증한다 — H2가 아닌
+ * 이유는 스키마가 {@code utf8mb4_0900_ai_ci}·{@code ON UPDATE CURRENT_TIMESTAMP} 등
+ * MySQL 전용 기능을 쓰기 때문이다(V1__init_schema.sql). 자격 증명 없이 뜨는 {@code dev}
+ * 프로필(application-dev.yml)로 StartupChecks·NCR/Graph 호출을 끄고, DB만 이 컨테이너로
+ * 교체한다 — 이 프로필의 계약이 바뀌면(예: ddl-auto, flyway 설정 변경) 이 테스트도 영향을
+ * 받는다. 변경 여부 계산 로직 자체는 {@link com.deployhub.version.service.ChangeDetectorTest}
+ * 단위 테스트가 이미 덮으므로 여기서 다시 검증하지 않는다.
+ */
+@Testcontainers
+@ActiveProfiles("dev")
+@SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
+class MainVersionApiFlowIntegrationTest {
+
+    // ponytail: 이 클래스가 유일한 @SpringBootTest라 클래스 단위 컨테이너로 충분하다.
+    // 같은 profile+설정을 쓰는 두 번째 통합 테스트 클래스가 생기면 @Testcontainers가
+    // afterAll에서 컨테이너를 멈춰도 Spring 컨텍스트 캐시는 살아남아 죽은 커넥션을
+    // 재사용하려 한다 — 그때는 static 초기화 블록에서 한 번만 start()하는 싱글턴
+    // 패턴으로 옮길 것.
+    @Container
+    @ServiceConnection
+    static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.0")
+            // 운영 JDBC URL(application.yml)과 동일한 파라미터라야 utf8mb4 왕복을 검증하는
+            // 의미가 있다.
+            .withUrlParam("characterEncoding", "UTF-8")
+            .withUrlParam("serverTimezone", "Asia/Seoul");
+
+    @Autowired
+    private TestRestTemplate restTemplate;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    // 컨테이너·컨텍스트를 클래스 단위로 공유하고 @Transactional 롤백도 못 쓰므로
+    // (RANDOM_PORT) 테스트 메서드마다 직접 비운다. component/package_item은
+    // ON DELETE CASCADE로 함께 지워진다.
+    @AfterEach
+    void 데이터_정리() {
+        jdbcTemplate.execute("DELETE FROM package_job");
+        jdbcTemplate.execute("DELETE FROM sub_version");
+        jdbcTemplate.execute("DELETE FROM main_version");
+    }
+
+    @Test
+    void 메인버전_등록부터_패키징_가능_여부_반영까지_전체_흐름이_동작한다() {
+        // "2026.09.01"처럼 점을 포함한 경로 변수가 깨지지 않는지도 함께 검증한다
+        // (구현계획서 321행 회귀 방지 요구).
+        String versionName = "2026.09.01";
+
+        // 1. 메인버전 등록 — UTF-8 한글 필드 왕복 확인
+        ResponseEntity<MainVersionInfoResponse> created = restTemplate.postForEntity(
+                "/api/main-versions",
+                new MainVersionCreateRequest(versionName, "릴리즈 노트", null),
+                MainVersionInfoResponse.class);
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(created.getBody().releaseNote()).isEqualTo("릴리즈 노트");
+
+        // 2. 서브버전 등록 — 컴포넌트 미지정 → {code}:{version} 1건 자동 생성
+        SubVersionUpsertBatchRequest batchRequest = new SubVersionUpsertBatchRequest(
+                List.of(new SubVersionUpsertRequest("pips", "1.0.22.0300", "변경 사항", 1, null)));
+        ResponseEntity<SubVersionSavedResponse[]> saved = restTemplate.exchange(
+                "/api/main-versions/{versionName}/sub-versions",
+                HttpMethod.PUT,
+                new HttpEntity<>(batchRequest),
+                SubVersionSavedResponse[].class,
+                versionName);
+        assertThat(saved.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(saved.getBody()).hasSize(1);
+        SubVersionSavedResponse savedSubVersion = saved.getBody()[0];
+        assertThat(savedSubVersion.imageTags()).containsExactly("pips:1.0.22.0300");
+
+        // 3. 계층 조회 — 컴포넌트 자동 생성 확인
+        ResponseEntity<MainVersionDetailResponse> detail = restTemplate.getForEntity(
+                "/api/main-versions/{versionName}", MainVersionDetailResponse.class, versionName);
+        assertThat(detail.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(detail.getBody().subVersions()).hasSize(1);
+        assertThat(detail.getBody().subVersions().get(0).components())
+                .extracting(ComponentResponse::imageTag)
+                .containsExactly("pips:1.0.22.0300");
+
+        // 4. 패키징 가능 여부 — submit_status가 PENDING이라 아직 불가
+        ResponseEntity<PackagingEligibilityResponse> beforeSubmit = restTemplate.getForEntity(
+                "/api/main-versions/{versionName}/packaging-eligibility",
+                PackagingEligibilityResponse.class,
+                versionName);
+        assertThat(beforeSubmit.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(beforeSubmit.getBody().eligible()).isFalse();
+        assertThat(beforeSubmit.getBody().blockingSubVersionCodes()).containsExactly("pips");
+
+        // 5. 담당 영역 상태 변경
+        ResponseEntity<Void> statusResponse = restTemplate.exchange(
+                "/api/sub-versions/{id}/submit-status",
+                HttpMethod.PATCH,
+                new HttpEntity<>(new SubmitStatusChangeRequest(SubmitStatus.UPDATED, "tester")),
+                Void.class,
+                savedSubVersion.id());
+        assertThat(statusResponse.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+        // 6. 패키징 가능 여부 — 즉시 반영되어 가능으로 전환
+        ResponseEntity<PackagingEligibilityResponse> afterSubmit = restTemplate.getForEntity(
+                "/api/main-versions/{versionName}/packaging-eligibility",
+                PackagingEligibilityResponse.class,
+                versionName);
+        assertThat(afterSubmit.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(afterSubmit.getBody().eligible()).isTrue();
+        assertThat(afterSubmit.getBody().blockingSubVersionCodes()).isEmpty();
+    }
+
+    @Test
+    void 서로_다른_서브버전이_같은_image_tag를_쓰면_400으로_거부된다() {
+        String versionName = "2026.09.02";
+        restTemplate.postForEntity(
+                "/api/main-versions", new MainVersionCreateRequest(versionName, null, null), MainVersionInfoResponse.class);
+
+        SubVersionUpsertBatchRequest duplicateTagRequest = new SubVersionUpsertBatchRequest(List.of(
+                new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, List.of("shared:v1")),
+                new SubVersionUpsertRequest("api", "v1.0.0", null, 2, List.of("shared:v1"))));
+
+        ResponseEntity<String> response = restTemplate.exchange(
+                "/api/main-versions/{versionName}/sub-versions",
+                HttpMethod.PUT,
+                new HttpEntity<>(duplicateTagRequest),
+                String.class,
+                versionName);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).contains("E-0203");
+    }
+
+    @Test
+    void Job이_있는_메인버전은_서브버전_수정이_409로_거부된다() {
+        String versionName = "2026.09.03";
+        restTemplate.postForEntity(
+                "/api/main-versions", new MainVersionCreateRequest(versionName, null, null), MainVersionInfoResponse.class);
+        restTemplate.exchange(
+                "/api/main-versions/{versionName}/sub-versions",
+                HttpMethod.PUT,
+                new HttpEntity<>(new SubVersionUpsertBatchRequest(
+                        List.of(new SubVersionUpsertRequest("pips", "1.0.0", null, 1, null)))),
+                SubVersionSavedResponse[].class,
+                versionName);
+
+        // Phase 3(매니페스트 확정 API)이 아직 없어 Job 존재 상태를 DB에 직접 만든다 — 이
+        // 테스트는 ManifestLockGuard(구현계획서 Phase 1-2, E-0204)만 검증한다.
+        jdbcTemplate.update(
+                "INSERT INTO package_job (version_name, status, created_by) VALUES (?, 'PENDING', 'tester')",
+                versionName);
+
+        ResponseEntity<String> response = restTemplate.exchange(
+                "/api/main-versions/{versionName}/sub-versions",
+                HttpMethod.PUT,
+                new HttpEntity<>(new SubVersionUpsertBatchRequest(
+                        List.of(new SubVersionUpsertRequest("pips", "1.0.1", null, 1, null)))),
+                String.class,
+                versionName);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody()).contains("E-0204");
+    }
+}
