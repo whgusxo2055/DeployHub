@@ -6,6 +6,8 @@ import static org.awaitility.Awaitility.await;
 import com.deployhub.job.dto.PackageItemRetryRequest;
 import com.deployhub.job.dto.PackageJobCreateRequest;
 import com.deployhub.job.dto.PackageJobDetailResponse;
+import com.deployhub.sharepoint.GraphFolderService;
+import com.deployhub.sharepoint.GraphUploadService;
 import com.deployhub.support.MySqlContainerSupport;
 import com.deployhub.version.dto.MainVersionCreateRequest;
 import com.deployhub.version.dto.MainVersionInfoResponse;
@@ -37,6 +39,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
@@ -125,6 +128,17 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
     @Value("${deployhub.work-dir}")
     private String workDir;
 
+    // 이 클래스는 FN-05/FN-06-1/FN-07(다운로드 파이프라인)만 검증 대상이다 — Phase 5
+    // (FN-08/09, SharePoint 업로드)는 실 Graph 자격증명이 준비되지 않아 대상 밖이므로
+    // 무력화한다. 그러지 않으면 dev 프로필의 placeholder Graph 자격증명으로 실제 네트워크
+    // 호출을 시도하다 실패해, 이 테스트가 검증하려는 것과 무관한 이유로 Job이 FAILED가
+    // 된다(코드리뷰로 발견 — 이전엔 이 때문에 DONE 단언을 완화해 테스트 검증력이 약해졌다).
+    @MockitoBean
+    private GraphFolderService graphFolderService;
+
+    @MockitoBean
+    private GraphUploadService graphUploadService;
+
     @AfterEach
     void 데이터_정리() throws IOException {
         jdbcTemplate.execute("DELETE FROM package_item");
@@ -172,9 +186,9 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(finalState.items().get(0).status()).isEqualTo("DOWNLOADED");
         assertThat(finalState.items().get(0).fileSize()).isGreaterThan(0);
 
-        // 파일명은 PackageDownloadService.safeFileName()이 해시 접미사까지 붙여 만든다
-        // (충돌 방지, 코드리뷰로 발견된 버그의 수정) — 여기서 그 로직을 그대로 재계산하는
-        // 대신, images/ 아래 실제로 만들어진 .tar 하나를 그대로 찾아서 쓴다.
+        // 파일명은 ImageReference.tarFileName()이 해시 접미사까지 붙여 만든다(충돌 방지,
+        // 코드리뷰로 발견된 버그의 수정) — 여기서 그 로직을 그대로 재계산하는 대신,
+        // images/ 아래 실제로 만들어진 .tar 하나를 그대로 찾아서 쓴다.
         Path imagesDir = Path.of(workDir, versionName, "images");
         List<Path> tarFiles;
         try (var stream = Files.list(imagesDir)) {

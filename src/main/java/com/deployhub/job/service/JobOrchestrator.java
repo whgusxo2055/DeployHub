@@ -2,6 +2,8 @@ package com.deployhub.job.service;
 
 import com.deployhub.job.entity.JobStatus;
 import com.deployhub.registry.NcrRegistryClient.ManifestInfo;
+import com.deployhub.sharepoint.GraphFolderService;
+import com.deployhub.sharepoint.GraphUploadService;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +28,8 @@ public class JobOrchestrator {
     private final PackageJobService packageJobService;
     private final PackageValidationService packageValidationService;
     private final PackageDownloadService packageDownloadService;
+    private final GraphFolderService graphFolderService;
+    private final GraphUploadService graphUploadService;
 
     @Async("jobExecutor")
     public void start(String versionName) {
@@ -72,6 +76,9 @@ public class JobOrchestrator {
         }
     }
 
-    /** Phase 5가 채운다 (FN-08 폴더 확보, FN-09 업로드). */
-    private void upload(String versionName) {}
+    /** FN-08 폴더 확보 + FN-09 업로드 (구현계획서 Phase 5). */
+    private void upload(String versionName) {
+        String folderItemId = graphFolderService.ensureFolder(versionName);
+        graphUploadService.uploadAll(versionName, folderItemId);
+    }
 }

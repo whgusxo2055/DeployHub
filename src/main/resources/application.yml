@@ -78,6 +78,11 @@ deployhub:
     concurrency: ${DOWNLOAD_CONCURRENCY:3}
     skopeo-timeout: ${SKOPEO_TIMEOUT:1800}
 
+  # Phase 5 — FN-09 업로드. 320 KiB(327680)의 배수여야 한다 — 아니면 기동이 실패한다
+  # (E-1108, StartupChecks).
+  upload:
+    chunk-size: ${UPLOAD_CHUNK_SIZE:10485760}
+
 springdoc:
   api-docs:
     path: /v3/api-docs

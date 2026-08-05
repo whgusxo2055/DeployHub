@@ -18,12 +18,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -152,7 +149,7 @@ public class PackageDownloadService {
             return failItem(item, "E-0501: 이미지가 존재하지 않습니다.", null);
         }
 
-        Path tarPath = imagesDir.resolve(safeFileName(ref) + ".tar");
+        Path tarPath = imagesDir.resolve(ref.tarFileName());
 
         int attempt = 0;
         while (true) {
@@ -178,7 +175,7 @@ public class PackageDownloadService {
             attempt++;
             item.incrementRetryCount();
             packageItemRepository.save(item);
-            sleep(backoffFor(attempt));
+            sleep(retryProperties.backoffFor(attempt));
         }
     }
 
@@ -342,12 +339,6 @@ public class PackageDownloadService {
         }
     }
 
-    private Duration backoffFor(int attempt) {
-        List<Duration> backoff = retryProperties.backoff();
-        int index = Math.min(attempt - 1, backoff.size() - 1);
-        return backoff.get(index);
-    }
-
     private static boolean isRetryable(String stderr) {
         return !NON_RETRYABLE_STDERR.matcher(stderr).find();
     }
@@ -364,28 +355,6 @@ public class PackageDownloadService {
         String trimmed = digest.strip();
         String withoutPrefix = trimmed.regionMatches(true, 0, "sha256:", 0, 7) ? trimmed.substring(7) : trimmed;
         return withoutPrefix.toLowerCase(Locale.ROOT);
-    }
-
-    /**
-     * {@code repository}/{@code tag}를 파일명으로 쓸 때 '/'·':' 치환만으로는 단사가 아니다
-     * — {@code a/b:1}과 {@code a_b:1}이 같은 파일명으로 충돌해 동시 다운로드 시 서로
-     * 덮어쓸 수 있다(코드리뷰로 발견). 해시 접미사로 충돌을 없앤다. {@code ImageReference}로
-     * 파싱된 값을 쓴다 — 원본 문자열을 직접 치환하면 파싱 검증과 파일명 생성이 암묵적으로만
-     * 동치라 나중에 검증 규칙이 느슨해지면 조용히 어긋날 수 있다.
-     */
-    private static String safeFileName(ImageReference ref) {
-        String identity = ref.repository() + ":" + ref.tag();
-        String base = identity.replace('/', '_').replace(':', '_');
-        return base + "_" + sha256Hex8(identity);
-    }
-
-    private static String sha256Hex8(String value) {
-        try {
-            byte[] hash = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash, 0, 4);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 알고리즘을 사용할 수 없습니다.", e);
-        }
     }
 
     private static void sleep(Duration duration) {

@@ -151,6 +151,21 @@ public class PackageJobService {
     }
 
     /**
+     * FN-08이 폴더를 확보한 뒤 호출한다({@code GraphFolderService}). 엔티티 변경은 서비스
+     * 계층의 {@code @Transactional} 메서드를 거치게 한다 — {@code GraphFolderService}가
+     * 리포지토리를 직접 만지면(비트랜잭션 상태에서 조회 후 detached 인스턴스를 save하는
+     * merge 경로) 그 사이 다른 트랜잭션이 같은 행을 바꿨을 때 조용히 덮어쓸 수 있다.
+     */
+    @Transactional
+    public void applyFolder(String versionName, String spFolderId, String spFolderUrl) {
+        PackageJob job = packageJobRepository
+                .findById(versionName)
+                .orElseThrow(() -> new ApiException(
+                        ErrorCode.PACKAGE_JOB_NOT_FOUND, "메인버전 '%s'의 패키지 Job이 없습니다.".formatted(versionName)));
+        job.applyFolder(spFolderId, spFolderUrl);
+    }
+
+    /**
      * FN-07 수동 재시도. {@code imageTags}를 지정하지 않으면 FAILED 전체가 대상이다 —
      * DOWNLOADED/UPLOADED 항목은 지정해도 대상에서 제외한다(구현계획서 489행). 작업
      * 디렉터리 자체가 소실됐으면(E-0703) {@code force=true}일 때만 전 항목을 재수집

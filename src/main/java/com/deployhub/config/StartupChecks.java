@@ -22,6 +22,10 @@ import org.springframework.stereotype.Component;
  * <p>{@code deployhub.startup-checks.enabled=false}로 끌 수 있다 — 실제 키 발급 전에
  * Swagger 명세만 보려는 경우처럼, NCR에 붙을 수 없는 환경에서 임시로 기동하려는 용도다
  * ({@code dev} 프로필 참고). 기본값은 {@code true}라 운영 동작은 바뀌지 않는다.
+ *
+ * <p>FN-09 {@code UPLOAD_CHUNK_SIZE} 검증(E-1108)은 여기 두지 않는다 —
+ * {@link com.deployhub.sharepoint.UploadChunkSizeValidator} 참고. 외부 연동 도달성과
+ * 무관한 순수 설정값 검증까지 이 클래스와 운명을 같이해 dev 프로필에서 꺼지면 안 된다.
  */
 @Slf4j
 @Component

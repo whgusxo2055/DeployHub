@@ -71,6 +71,13 @@ public class PackageItem {
         this.errorMessage = null;
     }
 
+    /** FN-09 업로드 성공 — fileUrl은 마지막 청크 응답의 Drive Item webUrl이다(구현계획서 559행). */
+    public void markUploaded(String fileUrl) {
+        this.status = PackageItemStatus.UPLOADED;
+        this.fileUrl = fileUrl;
+        this.errorMessage = null;
+    }
+
     /** FN-07 자동 재시도 — 백오프 대기 전에 호출해 폴링 클라이언트가 시도 횟수를 바로 본다. */
     public void incrementRetryCount() {
         this.retryCount = this.retryCount + 1;

@@ -79,4 +79,10 @@ public class PackageJob {
         this.finishedAt = null;
         this.deletedAt = null;
     }
+
+    /** FN-08 폴더 확보(생성 또는 재사용) 결과를 기록한다. 재사용이면 같은 값을 다시 써도 무해하다. */
+    public void applyFolder(String spFolderId, String spFolderUrl) {
+        this.spFolderId = spFolderId;
+        this.spFolderUrl = spFolderUrl;
+    }
 }

@@ -20,7 +20,7 @@ public record RetryProperties(int maxRetries, List<Duration> backoff) {
         }
     }
 
-    Duration backoffFor(int attempt) {
+    public Duration backoffFor(int attempt) {
         int index = Math.min(attempt - 1, backoff.size() - 1);
         return backoff.get(index);
     }
