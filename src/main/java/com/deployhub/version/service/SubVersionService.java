@@ -2,6 +2,7 @@ package com.deployhub.version.service;
 
 import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
+import com.deployhub.registry.ImageReference;
 import com.deployhub.version.dto.SubVersionSavedResponse;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
 import com.deployhub.version.dto.SubmitStatusChangeRequest;
@@ -113,12 +114,25 @@ public class SubVersionService {
         subVersion.changeSubmitStatus(request.status(), request.submittedBy());
     }
 
-    /** 컴포넌트를 명시하지 않으면 {@code code:version} 1건을 자동 생성한다. */
+    /**
+     * 컴포넌트를 명시하지 않으면 {@code code:version} 1건을 자동 생성한다. 어느 경로든
+     * {@link ImageReference#parse}로 Docker repository/tag 문법을 강제한다 — 이 값이
+     * Phase 3에서 package_item으로 확정 저장되고 Phase 4에서 NCR REST 경로·skopeo
+     * 인자에 그대로 들어가므로, 자유 문자열이 들어오는 이 지점(등록·수정)에서 막아야
+     * 인젝션 소지가 있는 문자가 뒤 단계로 흘러가지 않는다.
+     */
     private List<String> resolveImageTags(SubVersionUpsertRequest request) {
-        if (request.imageTags() == null || request.imageTags().isEmpty()) {
-            return List.of("%s:%s".formatted(request.code(), request.version()));
+        List<String> tags = (request.imageTags() == null || request.imageTags().isEmpty())
+                ? List.of("%s:%s".formatted(request.code(), request.version()))
+                : request.imageTags();
+        for (String tag : tags) {
+            try {
+                ImageReference.parse(tag);
+            } catch (IllegalArgumentException e) {
+                throw new ApiException(ErrorCode.SUB_VERSION_VALIDATION_FAILED, e.getMessage());
+            }
         }
-        return request.imageTags();
+        return tags;
     }
 
     /**

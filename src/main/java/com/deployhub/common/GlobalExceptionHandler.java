@@ -6,6 +6,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 /** 4.3절 오류 응답 스키마를 모든 컨트롤러에 일괄 적용한다. */
 @Slf4j
@@ -32,6 +33,17 @@ public class GlobalExceptionHandler {
 
         return ResponseEntity.status(errorCode.getHttpStatus())
                 .body(ApiErrorResponse.of(errorCode, errorCode.getDefaultMessage(), details));
+    }
+
+    // 예: GET /api/package-jobs?status=foo — JobStatus 같은 enum 쿼리 파라미터가 유효하지
+    // 않으면 여기로 온다. 없으면 handleUnexpected가 500 + 스택트레이스로 처리해버린다.
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        return ResponseEntity.status(ErrorCode.INVALID_QUERY_PARAMETER.getHttpStatus())
+                .body(ApiErrorResponse.of(
+                        ErrorCode.INVALID_QUERY_PARAMETER,
+                        ErrorCode.INVALID_QUERY_PARAMETER.getDefaultMessage(),
+                        List.of("%s: '%s'".formatted(ex.getName(), ex.getValue()))));
     }
 
     @ExceptionHandler(Exception.class)

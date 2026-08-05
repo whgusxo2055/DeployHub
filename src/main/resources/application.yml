@@ -66,6 +66,12 @@ deployhub:
     max-retries: ${MAX_RETRY:3}
     backoff: ${RETRY_BACKOFF:5,15}
 
+  # Phase 3 — Job 오케스트레이션 (0.6절 JOB_CONCURRENCY). 확정 시점 디스크 여유 공간
+  # 경고 기준은 기본 50GiB — 실제 필요 용량은 Phase 4가 매니페스트 크기로 계산한다.
+  job:
+    concurrency: ${JOB_CONCURRENCY:3}
+    min-free-disk-bytes: ${MIN_FREE_DISK_BYTES:53687091200}
+
 springdoc:
   api-docs:
     path: /v3/api-docs

@@ -12,52 +12,27 @@ import com.deployhub.version.dto.SubVersionUpsertBatchRequest;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
 import com.deployhub.version.dto.SubmitStatusChangeRequest;
 import com.deployhub.version.entity.SubmitStatus;
+import com.deployhub.support.MySqlContainerSupport;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.boot.test.web.client.TestRestTemplate;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.testcontainers.containers.MySQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
  * 이 프로젝트는 프론트엔드가 범위에서 제외된 백엔드 전용 API 서버라 Playwright E2E가
  * 검증할 화면이 없다 (구현계획서 0.1절). 대신 Phase 1 완료 기준(구현계획서 328-334행)에
- * 명시된 핵심 흐름들을 실제 MySQL 컨테이너 위에서 HTTP 엔드투엔드로 검증한다 — H2가 아닌
- * 이유는 스키마가 {@code utf8mb4_0900_ai_ci}·{@code ON UPDATE CURRENT_TIMESTAMP} 등
- * MySQL 전용 기능을 쓰기 때문이다(V1__init_schema.sql). 자격 증명 없이 뜨는 {@code dev}
- * 프로필(application-dev.yml)로 StartupChecks·NCR/Graph 호출을 끄고, DB만 이 컨테이너로
- * 교체한다 — 이 프로필의 계약이 바뀌면(예: ddl-auto, flyway 설정 변경) 이 테스트도 영향을
- * 받는다. 변경 여부 계산 로직 자체는 {@link com.deployhub.version.service.ChangeDetectorTest}
- * 단위 테스트가 이미 덮으므로 여기서 다시 검증하지 않는다.
+ * 명시된 핵심 흐름들을 실제 MySQL 컨테이너 위에서({@link MySqlContainerSupport}) HTTP
+ * 엔드투엔드로 검증한다. 변경 여부 계산 로직 자체는
+ * {@link com.deployhub.version.service.ChangeDetectorTest} 단위 테스트가 이미 덮으므로
+ * 여기서 다시 검증하지 않는다.
  */
-@Testcontainers
-@ActiveProfiles("dev")
-@SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-class MainVersionApiFlowIntegrationTest {
-
-    // ponytail: 이 클래스가 유일한 @SpringBootTest라 클래스 단위 컨테이너로 충분하다.
-    // 같은 profile+설정을 쓰는 두 번째 통합 테스트 클래스가 생기면 @Testcontainers가
-    // afterAll에서 컨테이너를 멈춰도 Spring 컨텍스트 캐시는 살아남아 죽은 커넥션을
-    // 재사용하려 한다 — 그때는 static 초기화 블록에서 한 번만 start()하는 싱글턴
-    // 패턴으로 옮길 것.
-    @Container
-    @ServiceConnection
-    static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.0")
-            // 운영 JDBC URL(application.yml)과 동일한 파라미터라야 utf8mb4 왕복을 검증하는
-            // 의미가 있다.
-            .withUrlParam("characterEncoding", "UTF-8")
-            .withUrlParam("serverTimezone", "Asia/Seoul");
+class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
 
     @Autowired
     private TestRestTemplate restTemplate;
@@ -66,10 +41,12 @@ class MainVersionApiFlowIntegrationTest {
     private JdbcTemplate jdbcTemplate;
 
     // 컨테이너·컨텍스트를 클래스 단위로 공유하고 @Transactional 롤백도 못 쓰므로
-    // (RANDOM_PORT) 테스트 메서드마다 직접 비운다. component/package_item은
-    // ON DELETE CASCADE로 함께 지워진다.
+    // (RANDOM_PORT) 테스트 메서드마다 직접 비운다. package_item → package_job 순으로
+    // 지운다 — FK가 ON DELETE CASCADE가 아니라(V1__init_schema.sql) 반대 순서면 위반한다.
+    // component는 sub_version에 CASCADE가 걸려 있어 별도로 지우지 않아도 된다.
     @AfterEach
     void 데이터_정리() {
+        jdbcTemplate.execute("DELETE FROM package_item");
         jdbcTemplate.execute("DELETE FROM package_job");
         jdbcTemplate.execute("DELETE FROM sub_version");
         jdbcTemplate.execute("DELETE FROM main_version");
@@ -174,8 +151,8 @@ class MainVersionApiFlowIntegrationTest {
                 SubVersionSavedResponse[].class,
                 versionName);
 
-        // Phase 3(매니페스트 확정 API)이 아직 없어 Job 존재 상태를 DB에 직접 만든다 — 이
-        // 테스트는 ManifestLockGuard(구현계획서 Phase 1-2, E-0204)만 검증한다.
+        // package-job API로도 Job을 만들 수 있지만, 이 테스트는 ManifestLockGuard
+        // (구현계획서 Phase 1-2, E-0204)만 좁게 검증하려는 것이라 DB에 직접 상태를 만든다.
         jdbcTemplate.update(
                 "INSERT INTO package_job (version_name, status, created_by) VALUES (?, 'PENDING', 'tester')",
                 versionName);
