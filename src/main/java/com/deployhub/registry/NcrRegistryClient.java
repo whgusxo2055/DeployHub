@@ -6,15 +6,19 @@ import com.deployhub.common.RelativePathGuard;
 import com.deployhub.common.retry.RetryAfterHeader;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryableCallException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
@@ -26,8 +30,10 @@ import org.springframework.web.util.UriComponentsBuilder;
  *
  * <p>REST 경로는 Basic 인증을 먼저 시도하고, {@code 401 + WWW-Authenticate: Bearer}
  * 응답을 받으면 해당 realm에서 토큰을 발급받아 Bearer로 전환한다(Docker Registry v2 토큰
- * 인증 흐름). CLI 경로(skopeo)는 {@link #credentialsForCli()}로 {@code --src-creds} 값을
- * 제공한다. 실제 다운로드는 Phase 4에서 구현한다.
+ * 인증 흐름). CLI 경로(skopeo, Phase 4)는 {@code PackageDownloadService}가
+ * {@code NcrProperties} 자격 증명으로 REGISTRY_AUTH_FILE(0600 임시 파일)을 직접 만들어
+ * 쓴다 — {@code --src-creds} 인자로 넘기면 같은 호스트의 다른 프로세스가
+ * {@code ps}/{@code /proc/<pid>/cmdline}으로 자격 증명을 볼 수 있어서다.
  *
  * <p>생성자로 {@link RestClient.Builder}를 주입받는다 — Spring Boot가 자동 구성하는 빈을
  * 쓰면 {@code spring.http.client.*} 타임아웃이 그대로 적용된다(정적 {@code RestClient.create()}를
@@ -43,6 +49,16 @@ public class NcrRegistryClient {
     // 콤마로 이어붙일 수 있다: `Bearer realm="...", Basic realm="..."`).
     private static final Pattern SPLIT_OUTSIDE_QUOTES = Pattern.compile(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
 
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final String DIGEST_HEADER = "Docker-Content-Digest";
+    // 구현계획서 459행은 Docker v2 schema2만 예시로 들지만, 실측해보니 최신 skopeo/buildx가
+    // 기본으로 push하는 이미지는 OCI 포맷이다 — schema2 Accept만 보내면 레지스트리가
+    // "존재하지만 변환 못 함"을 404(MANIFEST_UNKNOWN)로 돌려줘 실제 있는 이미지를 없는
+    // 것으로 오판한다(E-0501 오탐). OCI manifest도 layers[].size 구조가 동일해 파싱 로직은
+    // 그대로 재사용된다.
+    private static final String MANIFEST_ACCEPT =
+            "application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json";
+
     private final NcrProperties properties;
     private final RetryExecutor retryExecutor;
     private final RestClient restClient;
@@ -50,16 +66,14 @@ public class NcrRegistryClient {
     public NcrRegistryClient(NcrProperties properties, RetryExecutor retryExecutor, RestClient.Builder restClientBuilder) {
         this.properties = properties;
         this.retryExecutor = retryExecutor;
-        this.restClient =
-                restClientBuilder.baseUrl("https://" + properties.endpoint()).build();
+        this.restClient = restClientBuilder.baseUrl(resolveBaseUrl(properties.endpoint())).build();
     }
 
-    // ponytail: skopeo에 --src-creds 인자로 그대로 넘기면 같은 호스트의 다른 프로세스가
-    // ps/proc/<pid>/cmdline으로 볼 수 있다. Phase 4에서 실제로 skopeo를 호출할 때
-    // REGISTRY_AUTH_FILE(0600) 방식으로 바꾸는 걸 검토할 것.
-    /** skopeo {@code --src-creds}에 그대로 넣을 수 있는 {@code accessKey:secretKey} 문자열. */
-    public String credentialsForCli() {
-        return properties.accessKey() + ":" + properties.secretKey();
+    // Phase 4 로컬 레지스트리 통합 테스트가 평문 HTTP(registry:2)를 가리켜야 해서 스킴을
+    // 받아들인다. 운영 NCR_ENDPOINT(0.6절 예시 "{registry}.kr.ncr.ntruss.com")는 스킴이
+    // 없으므로 기존처럼 https://가 붙어 동작이 그대로다.
+    private static String resolveBaseUrl(String endpoint) {
+        return endpoint.contains("://") ? endpoint : "https://" + endpoint;
     }
 
     // ponytail: Bearer 토큰을 캐시하지 않아 매 호출마다 401→토큰발급→재요청 3 RTT다.
@@ -67,6 +81,87 @@ public class NcrRegistryClient {
     /** Basic→Bearer 폴백을 거쳐 인증된 GET 응답 본문을 반환한다. 실패 시 재시도 정책을 적용한다. */
     public String get(String path) {
         return retryExecutor.execute("NCR GET " + path, () -> attemptGet(path));
+    }
+
+    /**
+     * FN-05 매니페스트 존재 확인 (구현계획서 456-465행). {@code Docker-Content-Digest}
+     * 헤더와 {@code layers[].size} 합계를 반환한다 — Phase 4-2의 무결성 대조·디스크 여유
+     * 공간 판정 기준값이다. 404는 예외가 아니라 {@link Optional#empty()}로 돌려준다 —
+     * "이 항목만 표시, 검증은 계속"(E-0501)이라 호출자가 배치 전체를 중단하면 안 된다.
+     * 401/403/타임아웃은 {@link #get(String)}과 동일하게 {@link ApiException}으로 던진다
+     * — 호출자가 그 자체로 검증 중단(E-0502)·누락 간주(E-0503)를 구분해 처리한다.
+     */
+    public Optional<ManifestInfo> getManifest(String repository, String tag) {
+        String path = "/v2/%s/manifests/%s".formatted(repository, tag);
+        try {
+            return Optional.of(retryExecutor.execute("NCR manifest " + path, () -> attemptGetManifest(path)));
+        } catch (RestClientResponseException ex) {
+            if (ex.getStatusCode().value() == 404) {
+                return Optional.empty();
+            }
+            throw ex;
+        }
+    }
+
+    private ManifestInfo attemptGetManifest(String path) {
+        RelativePathGuard.requireRelative(path);
+        try {
+            return doGetManifest(path, basicAuthHeader());
+        } catch (RestClientResponseException ex) {
+            if (ex.getStatusCode().value() == 401) {
+                String wwwAuthenticate = ex.getResponseHeaders() == null
+                        ? null
+                        : ex.getResponseHeaders().getFirst(HttpHeaders.WWW_AUTHENTICATE);
+                if (wwwAuthenticate != null && wwwAuthenticate.regionMatches(true, 0, "Bearer", 0, 6)) {
+                    String token = fetchBearerToken(wwwAuthenticate);
+                    return doGetManifestClassified(path, "Bearer " + token);
+                }
+            }
+            throw classify(ex, path);
+        } catch (ResourceAccessException ex) {
+            throw timeoutRetryable(path, ex);
+        }
+    }
+
+    private ManifestInfo doGetManifestClassified(String path, String authorizationHeader) {
+        try {
+            return doGetManifest(path, authorizationHeader);
+        } catch (RestClientResponseException ex) {
+            throw classify(ex, path);
+        } catch (ResourceAccessException ex) {
+            throw timeoutRetryable(path, ex);
+        }
+    }
+
+    private ManifestInfo doGetManifest(String path, String authorizationHeader) {
+        ResponseEntity<String> response = restClient
+                .get()
+                .uri(path)
+                .header(HttpHeaders.AUTHORIZATION, authorizationHeader)
+                .header(HttpHeaders.ACCEPT, MANIFEST_ACCEPT)
+                .retrieve()
+                .toEntity(String.class);
+        String digest = response.getHeaders().getFirst(DIGEST_HEADER);
+        return new ManifestInfo(digest, sumLayerSizes(response.getBody()));
+    }
+
+    // 멀티아치 manifest list는 다루지 않는다 — Accept를 단일 플랫폼 manifest.v2+json으로
+    // 고정했고, 이 시스템이 패키징하는 이미지들은 사전 빌드된 단일 아키텍처 전제다.
+    private static long sumLayerSizes(String manifestJson) {
+        if (manifestJson == null || manifestJson.isBlank()) {
+            return 0L;
+        }
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(manifestJson);
+            long total = 0L;
+            for (JsonNode layer : root.path("layers")) {
+                total += layer.path("size").asLong(0L);
+            }
+            return total;
+        } catch (Exception e) {
+            log.warn("NCR 매니페스트 응답을 파싱할 수 없어 크기를 0으로 처리합니다.", e);
+            return 0L;
+        }
     }
 
     /** {@code GET /v2/} 도달성만 확인한다. 200/401 모두 "도달 가능"으로 간주한다 (0.6·Phase 0 기준). */
@@ -253,4 +348,7 @@ public class NcrRegistryClient {
             return token != null ? token : access_token;
         }
     }
+
+    /** FN-05 확정 시점 스냅샷. {@code digest}는 Phase 4-2 무결성 대조, {@code totalSize}는 디스크 판정 기준값이다. */
+    public record ManifestInfo(String digest, long totalSize) {}
 }

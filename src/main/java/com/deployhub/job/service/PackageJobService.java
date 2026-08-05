@@ -2,12 +2,14 @@ package com.deployhub.job.service;
 
 import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
+import com.deployhub.job.dto.PackageItemRetryRequest;
 import com.deployhub.job.dto.PackageItemResponse;
 import com.deployhub.job.dto.PackageJobCreateRequest;
 import com.deployhub.job.dto.PackageJobDetailResponse;
 import com.deployhub.job.dto.PackageJobResponse;
 import com.deployhub.job.entity.JobStatus;
 import com.deployhub.job.entity.PackageItem;
+import com.deployhub.job.entity.PackageItemStatus;
 import com.deployhub.job.entity.PackageJob;
 import com.deployhub.job.repository.PackageItemRepository;
 import com.deployhub.job.repository.PackageJobRepository;
@@ -19,6 +21,8 @@ import com.deployhub.version.service.PackagingEligibility;
 import com.deployhub.version.service.PackagingEligibilityService;
 import com.deployhub.version.service.VersionComparisonService;
 import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.SQLIntegrityConstraintViolationException;
 import java.util.EnumSet;
 import java.util.HashSet;
@@ -144,6 +148,64 @@ public class PackageJobService {
                 .orElseThrow(() -> new ApiException(
                         ErrorCode.PACKAGE_JOB_NOT_FOUND, "메인버전 '%s'의 패키지 Job이 없습니다.".formatted(versionName)));
         job.changeStatus(status);
+    }
+
+    /**
+     * FN-07 수동 재시도. {@code imageTags}를 지정하지 않으면 FAILED 전체가 대상이다 —
+     * DOWNLOADED/UPLOADED 항목은 지정해도 대상에서 제외한다(구현계획서 489행). 작업
+     * 디렉터리 자체가 소실됐으면(E-0703) {@code force=true}일 때만 전 항목을 재수집
+     * 대상으로 되돌린다. 재개는 {@link JobOrchestrator#resume(String)}이 맡는다 — 이
+     * 트랜잭션 커밋 후 컨트롤러가 호출한다(FN-03 create()와 동일한 이유).
+     */
+    @Transactional
+    public PackageJobDetailResponse retry(String versionName, PackageItemRetryRequest request) {
+        // findById(락 없음)를 쓰면 동시 재시도 요청 두 건이 모두 FAILED를 보고 통과해
+        // resume()이 두 번 제출된다 — 같은 tarPath에 두 워커가 동시에 쓰게 된다
+        // (resolveJob의 동시성 방어와 같은 이유, PackageJobRepository.findByVersionName 참고).
+        PackageJob job = packageJobRepository
+                .findByVersionName(versionName)
+                .orElseThrow(() -> new ApiException(
+                        ErrorCode.PACKAGE_JOB_NOT_FOUND, "메인버전 '%s'의 패키지 Job이 없습니다.".formatted(versionName)));
+        if (job.getStatus() != JobStatus.FAILED) {
+            throw new ApiException(ErrorCode.RETRY_REJECTED_JOB_NOT_FAILED);
+        }
+
+        boolean workDirLost = !Files.isDirectory(Path.of(workDir, versionName, "images"));
+        if (workDirLost && !request.force()) {
+            throw new ApiException(ErrorCode.WORK_DIR_LOST);
+        }
+
+        List<PackageItem> allItems = packageItemRepository.findByVersionNameOrderByImageTagAsc(versionName);
+        List<PackageItem> targets = resolveRetryTargets(allItems, request, workDirLost);
+        if (targets.isEmpty()) {
+            throw new ApiException(ErrorCode.NO_PACKAGING_TARGET, "재시도할 대상이 없습니다.");
+        }
+
+        for (PackageItem item : targets) {
+            item.resetForRetry();
+        }
+        packageItemRepository.saveAll(targets);
+        job.changeStatus(JobStatus.DOWNLOADING);
+
+        List<PackageItem> items = packageItemRepository.findByVersionNameOrderByImageTagAsc(versionName);
+        return PackageJobDetailResponse.builder()
+                .job(PackageJobResponse.of(job, items))
+                .items(items.stream().map(PackageItemResponse::from).toList())
+                .build();
+    }
+
+    private List<PackageItem> resolveRetryTargets(List<PackageItem> allItems, PackageItemRetryRequest request, boolean workDirLost) {
+        if (workDirLost) {
+            // force=true로만 여기 온다(위에서 이미 걸렀다) — 전건 재수집.
+            return allItems;
+        }
+        if (request.imageTags() == null || request.imageTags().isEmpty()) {
+            return allItems.stream().filter(item -> item.getStatus() == PackageItemStatus.FAILED).toList();
+        }
+        Set<String> requested = new HashSet<>(request.imageTags());
+        return allItems.stream()
+                .filter(item -> requested.contains(item.getImageTag()) && item.getStatus() == PackageItemStatus.FAILED)
+                .toList();
     }
 
     public List<PackageJobResponse> list(JobStatus statusFilter) {

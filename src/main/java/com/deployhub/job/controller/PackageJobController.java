@@ -2,6 +2,7 @@ package com.deployhub.job.controller;
 
 import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
+import com.deployhub.job.dto.PackageItemRetryRequest;
 import com.deployhub.job.dto.PackageJobCreateRequest;
 import com.deployhub.job.dto.PackageJobDetailResponse;
 import com.deployhub.job.dto.PackageJobResponse;
@@ -72,6 +73,24 @@ public class PackageJobController {
     @GetMapping("/api/package-jobs/{versionName}")
     public PackageJobDetailResponse getJob(@PathVariable String versionName) {
         return packageJobService.getDetail(versionName);
+    }
+
+    @Operation(summary = "실패 항목 수동 재시도 (FN-07)")
+    @ApiResponse(responseCode = "400", description = "E-0303: 재시도 대상 없음")
+    @ApiResponse(responseCode = "404", description = "E-0306: 패키지 Job 없음")
+    @ApiResponse(responseCode = "409", description = "E-0702: 재시도 불가 상태, E-0703: 작업 디렉터리 소실")
+    @ApiResponse(responseCode = "503", description = "E-1502: 실행 대기열 포화")
+    @PostMapping("/api/package-jobs/{versionName}/retry")
+    public PackageJobDetailResponse retryPackageJob(
+            @PathVariable String versionName, @Valid @RequestBody PackageItemRetryRequest request) {
+        PackageJobDetailResponse updated = packageJobService.retry(versionName, request);
+        try {
+            jobOrchestrator.resume(versionName);
+        } catch (TaskRejectedException e) {
+            packageJobService.changeStatus(versionName, JobStatus.FAILED);
+            throw new ApiException(ErrorCode.JOB_QUEUE_SATURATED);
+        }
+        return updated;
     }
 
     @Operation(summary = "패키지 Job 목록 조회 (FN-11)")

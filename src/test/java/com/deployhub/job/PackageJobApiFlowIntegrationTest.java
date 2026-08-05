@@ -30,13 +30,18 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 
 /**
  * Phase 3 완료 기준(구현계획서 431-440행) — 매니페스트 확정, FN-11 중복 방지, 고아 Job
- * 정리를 실제 MySQL 컨테이너 위에서 HTTP 엔드투엔드로 검증한다. JobOrchestrator의 단계가
- * 전부 빈 구현이라 Job은 생성 직후 곧바로 DONE까지 전이된다 — 중간 상태 포착은 플레이키하므로
- * 최종 상태만 단언한다. 재사용(DONE/FAILED/진행중) 시나리오는 오케스트레이터가 실제로 완료
- * 시켰는지에 의존하지 않도록, 그 상태를 jdbcTemplate으로 직접 만들어 검증 대상을 좁힌다.
+ * 정리를 실제 MySQL 컨테이너 위에서 HTTP 엔드투엔드로 검증한다. 이 클래스는 FN-03/FN-11
+ * (매니페스트 확정·중복 방지) 로직만 다룬다 — Job이 실제로 DONE까지 도달하는 것은 Phase 4가
+ * {@link PackageJobDownloadFlowIntegrationTest}에서 실 레지스트리로 검증한다. 여기서는
+ * {@code dev} 프로필의 placeholder NCR 엔드포인트를 그대로 쓰므로, 오케스트레이터가 실제로
+ * 실행되면 VALIDATING에서 반드시 FAILED로 끝난다 — 그 사실 자체(오케스트레이터가 정말
+ * 시작됐는지)만 확인하고, 재사용(DONE/FAILED/진행중) 시나리오는 그 상태를 jdbcTemplate으로
+ * 직접 만들어 오케스트레이터의 실제 완료 여부와 무관하게 검증 대상을 좁힌다.
  */
 class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
 
@@ -49,6 +54,15 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
     @Autowired
     private OrphanJobCleaner orphanJobCleaner;
 
+    // placeholder.invalid는 DNS조차 해석되지 않아 NCR 호출이 매번 재시도 정책을 다 태운다
+    // (기본 backoff 5s+15s+45s) — 이 클래스는 그 실패 자체를 기다리므로 재시도를 꺼서
+    // Awaitility 타임아웃 안에 끝나게 한다. 다른 시나리오(FN-03/FN-11 동기 검증)는 이
+    // 값과 무관하다.
+    @DynamicPropertySource
+    static void fastRetry(DynamicPropertyRegistry registry) {
+        registry.add("deployhub.retry.max-retries", () -> 0);
+    }
+
     @AfterEach
     void 데이터_정리() {
         jdbcTemplate.execute("DELETE FROM package_item");
@@ -58,7 +72,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
     }
 
     @Test
-    void 변경된_컴포넌트만_선택되어_Job이_DONE까지_전이된다() {
+    void 변경된_컴포넌트만_선택되고_오케스트레이터가_실행된다() {
         registerMainVersion("2026.10.01");
         registerAndSubmitSubVersion("2026.10.01", "pips", "1.0.0", null);
 
@@ -74,11 +88,14 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(created.getBody().items()).extracting(PackageItemResponse::imageTag).containsExactly("api:2.0.0");
 
+        // placeholder NCR 엔드포인트라 VALIDATING을 실제로 시도하다 FAILED로 끝난다 —
+        // "DONE까지 도달"은 실 레지스트리를 쓰는 PackageJobDownloadFlowIntegrationTest가 검증한다.
+        // 여기서는 오케스트레이터가 정말 PENDING을 벗어나 실행됐다는 것만 확인한다.
         await().atMost(Duration.ofSeconds(10))
                 .untilAsserted(() -> {
                     ResponseEntity<PackageJobDetailResponse> polled = restTemplate.getForEntity(
                             "/api/package-jobs/{versionName}", PackageJobDetailResponse.class, "2026.10.02");
-                    assertThat(polled.getBody().job().status()).isEqualTo("DONE");
+                    assertThat(polled.getBody().job().status()).isEqualTo("FAILED");
                     assertThat(polled.getBody().items()).extracting(PackageItemResponse::imageTag)
                             .containsExactly("api:2.0.0");
                 });

@@ -9,7 +9,9 @@ import org.springframework.http.HttpStatus;
  * 대역 안에서 구체적인 코드를 갖는다 — 여러 도메인이 "요청 값 검증 실패" 같은 하나의
  * 공용 코드를 나눠 쓰지 않는다 ({@link com.deployhub.common.ValidatedRequest} 참조).
  * 각 Phase가 진행되면서 자기 대역(E-03xx ~ E-15xx)을 채운다. 아직 쓰지 않는 코드는
- * 정의하지 않는다 — Phase 3까지는 E-01xx·E-02xx·E-03xx(일부)·E-04xx·E-1301만 존재한다.
+ * 정의하지 않는다 — Phase 4까지는 E-01xx·E-02xx·E-03xx(일부)·E-04xx·E-0702·E-0703·
+ * E-1301·E-1502만 존재한다. E-05xx/E-06xx/E-0701은 HTTP로 나가지 않고
+ * {@code package_item.error_message}에만 문자열로 남으므로 이 enum에 없다(E-0403 참고).
  */
 @Getter
 @RequiredArgsConstructor
@@ -50,6 +52,11 @@ public enum ErrorCode {
     GRAPH_TOKEN_ISSUE_FAILED("E-0451", HttpStatus.BAD_GATEWAY, "Microsoft Graph 토큰 발급에 실패했습니다."),
     GRAPH_FORBIDDEN("E-0452", HttpStatus.FORBIDDEN, "Microsoft Graph 권한이 부족합니다."),
     GRAPH_UNAVAILABLE("E-0453", HttpStatus.SERVICE_UNAVAILABLE, "Microsoft Graph가 일시적으로 응답하지 않습니다."),
+
+    // E-07xx FN-07 수동 재시도 (Phase 4). E-0701(MAX_RETRY 초과)은 여기 없다 — E-0403과
+    // 같은 이유로, HTTP 응답이 아니라 package_item.error_message에만 남는 코드다.
+    RETRY_REJECTED_JOB_NOT_FAILED("E-0702", HttpStatus.CONFLICT, "완료되었거나 진행 중인 Job은 재시도할 수 없습니다."),
+    WORK_DIR_LOST("E-0703", HttpStatus.CONFLICT, "작업 디렉터리가 소실되었습니다. force=true로 전체 재수집을 진행할 수 있습니다."),
 
     // E-13xx/E-15xx Job 오케스트레이션 동시성 (Phase 3). E-1501(기동 시 고아 Job 정리)은
     // 여기 없다 — E-0403과 같은 이유로, HTTP 응답으로 나가지 않고 OrphanJobCleaner가

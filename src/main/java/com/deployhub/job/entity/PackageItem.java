@@ -47,15 +47,45 @@ public class PackageItem {
     @Column(name = "retry_count", nullable = false)
     private Integer retryCount = 0;
 
-    // ponytail: 지금은 항상 null이지만 Phase 4가 skopeo/NCR 실패 stderr를 여기 채운다.
-    // NcrRegistryClient.credentialsForCli()가 반환하는 accessKey:secretKey가 skopeo
-    // 실패 메시지에 그대로 노출될 수 있으므로(프로젝트 규약: 자격증명은 로그·API 응답
-    // 어디에도 남기지 않는다 — NcrProperties/GraphProperties의 toString() 마스킹 패턴
-    // 참고), Phase 4는 이 컬럼에 쓰기 전에 마스킹해야 한다. 응답 시점 마스킹은 늦다 —
-    // DB에 평문이 이미 남는다.
+    // Phase 4가 skopeo/NCR 실패 stderr를 여기 채운다. REGISTRY_AUTH_FILE 방식이라
+    // accessKey:secretKey가 CLI 인자로는 안 남지만, skopeo가 오류 메시지에 인증 파일
+    // 내용을 반영할 가능성까지 배제할 수 없어 PackageDownloadService가 저장 전에
+    // CredentialMasker로 마스킹한다(프로젝트 규약: 자격증명은 로그·API 응답 어디에도
+    // 남기지 않는다). 응답 시점 마스킹은 늦다 — DB에 평문이 이미 남는다.
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
     @Column(name = "file_url", length = 500)
     private String fileUrl;
+
+    /** FN-05/FN-06-1/FN-07 실패 처리 — 자동 재시도 여부는 호출자(PackageDownloadService)가 판단한다. */
+    public void markFailed(String errorMessage) {
+        this.status = PackageItemStatus.FAILED;
+        this.errorMessage = errorMessage;
+    }
+
+    /** FN-06-1 다운로드 성공 — file_size는 실제 산출 .tar 크기다(매니페스트 예상치가 아님). */
+    public void markDownloaded(long fileSize) {
+        this.status = PackageItemStatus.DOWNLOADED;
+        this.fileSize = fileSize;
+        this.errorMessage = null;
+    }
+
+    /** FN-07 자동 재시도 — 백오프 대기 전에 호출해 폴링 클라이언트가 시도 횟수를 바로 본다. */
+    public void incrementRetryCount() {
+        this.retryCount = this.retryCount + 1;
+    }
+
+    /**
+     * FN-07 수동 재시도 대상 초기화. 일반적으로 DOWNLOADED/UPLOADED 항목은 대상에서
+     * 제외되지만(PackageJobService.resolveRetryTargets), 작업 디렉터리 소실(E-0703) +
+     * force=true 경로는 그 항목들까지 전건 되돌린다 — 이때 fileSize/fileUrl을 안 지우면
+     * 재수집 중인 항목이 이전 다운로드 크기·SharePoint 업로드 URL을 그대로 노출한다.
+     */
+    public void resetForRetry() {
+        this.status = PackageItemStatus.PENDING;
+        this.errorMessage = null;
+        this.fileSize = null;
+        this.fileUrl = null;
+    }
 }

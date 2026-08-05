@@ -26,13 +26,49 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 @EnableAsync
 public class AsyncConfig {
 
+    // 구현계획서 456행 "동시 요청 5건 제한" — 0.6절 설정값 표에 없는 값이라 env var로
+    // 노출하지 않고 상수로 고정한다. NCR 전체가 공유하는 전역 상한이다(Job별이 아님).
+    private static final int MANIFEST_CHECK_CONCURRENCY = 5;
+
     @Bean("jobExecutor")
-    public ThreadPoolTaskExecutor jobExecutor(@Value("${deployhub.job.concurrency:3}") int concurrency) {
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(concurrency);
+        public ThreadPoolTaskExecutor jobExecutor(@Value("${deployhub.job.concurrency:3}") int concurrency) {
+            ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+            executor.setCorePoolSize(concurrency);
         executor.setMaxPoolSize(concurrency);
         executor.setQueueCapacity(100);
         executor.setThreadNamePrefix("job-");
+        executor.initialize();
+        return executor;
+    }
+
+    /** FN-05 매니페스트 조회 전용 (Phase 4). {@code @Async}가 아니라 서비스가 직접 제출한다. */
+    @Bean("manifestExecutor")
+    public ThreadPoolTaskExecutor manifestExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(MANIFEST_CHECK_CONCURRENCY);
+        executor.setMaxPoolSize(MANIFEST_CHECK_CONCURRENCY);
+        executor.setQueueCapacity(200);
+        executor.setThreadNamePrefix("manifest-");
+        executor.initialize();
+        return executor;
+    }
+
+    /**
+     * FN-06-1 다운로드 전용 (Phase 4). 풀 크기를 {@code JOB_CONCURRENCY × DOWNLOAD_CONCURRENCY}로
+     * 잡아 Job 전체가 공유한다 — Job당 별도 풀을 두지 않아도 "Job 3건 × 아이템 3건 = skopeo
+     * 최대 9개 동시"(구현계획서 470행)가 자연히 성립한다(Job 하나가 한 번에 최대
+     * DOWNLOAD_CONCURRENCY개만 제출하고 완료를 기다린 뒤 다음 배치를 제출하므로).
+     */
+    @Bean("downloadExecutor")
+    public ThreadPoolTaskExecutor downloadExecutor(
+            @Value("${deployhub.job.concurrency:3}") int jobConcurrency,
+            @Value("${deployhub.download.concurrency:3}") int downloadConcurrency) {
+        int size = jobConcurrency * downloadConcurrency;
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(size);
+        executor.setMaxPoolSize(size);
+        executor.setQueueCapacity(200);
+        executor.setThreadNamePrefix("download-");
         executor.initialize();
         return executor;
     }

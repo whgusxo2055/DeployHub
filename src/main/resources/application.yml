@@ -72,6 +72,12 @@ deployhub:
     concurrency: ${JOB_CONCURRENCY:3}
     min-free-disk-bytes: ${MIN_FREE_DISK_BYTES:53687091200}
 
+  # Phase 4 — FN-06-1 다운로드. downloadExecutor 풀 크기는 JOB_CONCURRENCY ×
+  # download.concurrency (0.6절 "Job 3건 × 아이템 3건 = skopeo 최대 9개 동시" 근거).
+  download:
+    concurrency: ${DOWNLOAD_CONCURRENCY:3}
+    skopeo-timeout: ${SKOPEO_TIMEOUT:1800}
+
 springdoc:
   api-docs:
     path: /v3/api-docs
