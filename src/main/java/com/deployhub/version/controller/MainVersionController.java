@@ -29,6 +29,11 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * 메인버전 CRUD와, 메인버전 경로에 종속된 서브버전 일괄 등록({@code PUT
+ * .../sub-versions})을 함께 둔다. 서브버전을 자기 id로 다루는 나머지 작업(삭제·상태 변경)은
+ * {@link SubVersionController}가 맡는다 — URL 경로가 메인버전에 종속되는지 여부로 나눴다.
+ */
 @RestController
 @Tag(name = "버전 및 매니페스트 관리")
 @RequiredArgsConstructor
