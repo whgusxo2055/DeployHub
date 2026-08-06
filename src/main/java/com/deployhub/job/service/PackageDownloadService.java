@@ -44,9 +44,14 @@ import org.springframework.stereotype.Service;
 public class PackageDownloadService {
 
     // 매니페스트 layers[].size는 압축된 blob 크기지만 docker-archive: 목적지는 압축 해제된
-    // 레이어를 쓴다 — 실측 압축비가 보통 2~3배라 여유를 넉넉히 잡는다(코드리뷰로 발견,
-    // 1.5배는 통과시키고 실제 다운로드에서 디스크가 터지는 경우가 있었음).
-    private static final double REQUIRED_FREE_SPACE_RATIO = 3.0;
+    // 레이어를 쓴다(레거시 포맷이 레이어를 diff_id = 비압축 sha256으로 식별하기 때문).
+    //
+    // ponytail: 압축비를 미리 알 수 없어 고정 배율로 근사한다. 실측값 — dev-ncr-sb 이미지
+    // 8개가 1.76~2.39배, 외부 이미지 mysql:8.0이 3.37배로 3.0을 넘겼다. 디스크는 여유가
+    // 충분하므로(전체 12개 패키징 시에도 500GB 중 약 60GB) 배율을 넉넉히 잡는 비용이 없다.
+    // 정확히 하려면 레이어별 gzip ISIZE를 Range 요청으로 읽어야 하는데, 4GiB 초과 레이어에서
+    // ISIZE가 mod 2^32로 순환해 큰 이미지에는 못 쓴다 — 실측으로 확인했다.
+    private static final double REQUIRED_FREE_SPACE_RATIO = 5.0;
     private static final Pattern NON_RETRYABLE_STDERR =
             Pattern.compile("(?i)unauthorized|forbidden|\\b401\\b|\\b403\\b|\\b404\\b|manifest unknown|not found");
     private static final int STDERR_CAPTURE_LIMIT = 8192;
@@ -121,11 +126,18 @@ public class PackageDownloadService {
         if (manifestContext.isEmpty()) {
             return;
         }
-        long expectedTotal = targets.stream()
+        List<ManifestInfo> infos = targets.stream()
                 .map(item -> manifestContext.get(item.getImageTag()))
                 .filter(Objects::nonNull)
-                .mapToLong(ManifestInfo::totalSize)
-                .sum();
+                .toList();
+        // 크기 미상이 하나라도 섞이면 합계가 과소평가된다 — 0으로 더하면 "필요 용량 0"이 되어
+        // 가드가 조용히 통과하므로, 아예 사전 확인을 건너뛰고 skopeo 실행 시점의 실제 실패에
+        // 맡긴다(manifestContext가 빈 재시도 경로와 동일한 정책).
+        if (infos.stream().anyMatch(ManifestInfo::hasUnknownSize)) {
+            log.warn("예상 크기를 알 수 없는 항목이 있어 디스크 사전 확인을 건너뜁니다.");
+            return;
+        }
+        long expectedTotal = infos.stream().mapToLong(ManifestInfo::totalSize).sum();
         long required = (long) (expectedTotal * REQUIRED_FREE_SPACE_RATIO);
         long usable = imagesDir.toFile().getUsableSpace();
         if (usable < required) {
