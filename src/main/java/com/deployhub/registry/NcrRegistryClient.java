@@ -43,6 +43,8 @@ import org.springframework.web.util.UriComponentsBuilder;
 @Component
 public class NcrRegistryClient {
 
+    // OCI digest 문법(algorithm ":" encoded) — '/', '.', '?', '#', '{', '%'가 원천 배제된다.
+    private static final Pattern DIGEST = Pattern.compile("[a-z0-9]+([.+_-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,}");
     private static final Pattern PARAM = Pattern.compile("^(\\w+)\\s*=\\s*\"([^\"]*)\"$");
     private static final Pattern BEARER_SCHEME = Pattern.compile("(?i)^bearer\\b\\s*(.*)$");
     // 따옴표 안의 콤마는 챌린지 구분자로 보지 않는다 (WWW-Authenticate가 여러 scheme을
@@ -56,8 +58,16 @@ public class NcrRegistryClient {
     // "존재하지만 변환 못 함"을 404(MANIFEST_UNKNOWN)로 돌려줘 실제 있는 이미지를 없는
     // 것으로 오판한다(E-0501 오탐). OCI manifest도 layers[].size 구조가 동일해 파싱 로직은
     // 그대로 재사용된다.
-    private static final String MANIFEST_ACCEPT =
-            "application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json";
+    //
+    // 인덱스(멀티아치) 타입도 반드시 함께 보낼 것 — dev-ncr-sb 실측에서 저장소 12개 중 3개가
+    // OCI index로 저장돼 있었고, 인덱스 타입이 빠지면 레지스트리가 그 사실을 명시한 404를
+    // 돌려준다("OCI index found, but accept header does not support OCI indexes").
+    private static final String MANIFEST_ACCEPT = String.join(
+            ",",
+            "application/vnd.docker.distribution.manifest.v2+json",
+            "application/vnd.oci.image.manifest.v1+json",
+            "application/vnd.docker.distribution.manifest.list.v2+json",
+            "application/vnd.oci.image.index.v1+json");
 
     private final NcrProperties properties;
     private final RetryExecutor retryExecutor;
@@ -142,25 +152,110 @@ public class NcrRegistryClient {
                 .retrieve()
                 .toEntity(String.class);
         String digest = response.getHeaders().getFirst(DIGEST_HEADER);
-        return new ManifestInfo(digest, sumLayerSizes(response.getBody()));
+        return new ManifestInfo(digest, totalSize(response.getBody(), path, authorizationHeader));
     }
 
-    // 멀티아치 manifest list는 다루지 않는다 — Accept를 단일 플랫폼 manifest.v2+json으로
-    // 고정했고, 이 시스템이 패키징하는 이미지들은 사전 빌드된 단일 아키텍처 전제다.
-    private static long sumLayerSizes(String manifestJson) {
+    /**
+     * 레이어 크기 합계. 인덱스(멀티아치)면 플랫폼 매니페스트를 한 번 더 조회해 합산한다 —
+     * 인덱스 자체에는 {@code layers}가 없어 그대로 더하면 0이 된다. 반환하는 {@code digest}는
+     * 태그가 가리키는 인덱스 digest 그대로 둔다 — 레지스트리·skopeo가 비교하는 값과 같아야
+     * 하기 때문이다.
+     *
+     * <p>크기를 못 구한 경우 0이 아니라 {@link ManifestInfo#UNKNOWN_SIZE}를 반환한다. 0으로
+     * 돌려주면 호출자의 디스크 여유 판정이 "필요 용량 0"으로 읽어 무조건 통과시킨다 —
+     * 가드가 조용히 fail-open 된다.
+     */
+    private long totalSize(String manifestJson, String path, String authorizationHeader) {
+        JsonNode root = readTree(manifestJson);
+        if (root == null) {
+            return ManifestInfo.UNKNOWN_SIZE;
+        }
+        JsonNode manifests = root.path("manifests");
+        if (!manifests.isArray() || manifests.isEmpty()) {
+            return sumLayerSizes(root);
+        }
+        String childDigest = selectPlatformDigest(manifests);
+        if (childDigest == null) {
+            log.warn("NCR 인덱스에서 쓸 플랫폼 매니페스트를 찾지 못해 크기를 미상으로 처리합니다: {}", path);
+            return ManifestInfo.UNKNOWN_SIZE;
+        }
+        // ponytail: 인덱스 → 매니페스트 1단계만 따라간다. 중첩 인덱스는 실물이 드물어 미지원.
+        String childPath = path.substring(0, path.lastIndexOf('/') + 1) + childDigest;
+        RelativePathGuard.requireRelative(childPath); // 방어층 — 형식 검증은 selectPlatformDigest가 이미 했다
+        JsonNode child;
+        try {
+            child = readTree(restClient
+                    .get()
+                    .uri(childPath)
+                    .header(HttpHeaders.AUTHORIZATION, authorizationHeader)
+                    .header(HttpHeaders.ACCEPT, MANIFEST_ACCEPT)
+                    .retrieve()
+                    .body(String.class));
+        } catch (RestClientResponseException ex) {
+            // 인덱스는 200인데 자식만 실패한 상황이다. RestClientResponseException을 그대로
+            // 올리면 getManifest의 404 분기가 삼켜 "이미지 없음"(E-0501)으로 오판한다 —
+            // 이 수정이 없애려던 실패 모드가 그대로 되살아난다. 반드시 다른 타입으로 바꿔 던진다.
+            RuntimeException classified = classify(ex, childPath);
+            throw classified instanceof RestClientResponseException
+                    ? new ApiException(ErrorCode.REGISTRY_UNREACHABLE)
+                    : classified;
+        } catch (ResourceAccessException ex) {
+            throw timeoutRetryable(childPath, ex);
+        }
+        return child == null ? ManifestInfo.UNKNOWN_SIZE : sumLayerSizes(child);
+    }
+
+    /**
+     * linux/amd64를 우선 고르고 없으면 첫 실제 플랫폼 항목을 쓴다. buildx가 이미지와 함께
+     * push하는 어테스테이션 항목은 {@code platform}이 unknown/unknown이라 반드시 걸러야 한다 —
+     * 그걸 고르면 이미지가 아니라 서명 blob 크기를 더하게 된다.
+     *
+     * <p>{@code digest}는 응답 본문에서 온 값이라 레지스트리에 push 권한이 있으면 임의 문자열을
+     * 넣을 수 있다. 이 값이 그대로 경로에 붙으므로 반드시 digest 문법을 검사할 것 —
+     * {@code ../}(같은 호스트 내 경로 탈출), {@code ?}·{@code #}(쿼리·프래그먼트 인젝션),
+     * {@code {}}(Spring URI 템플릿 변수로 해석돼 {@code IllegalArgumentException}이 나고,
+     * 그 예외가 {@code ApiException}이 아니라서 검증 배치 전체를 중단시킨다)가 모두 걸러진다.
+     */
+    private static String selectPlatformDigest(JsonNode manifests) {
+        String fallback = null;
+        for (JsonNode entry : manifests) {
+            JsonNode platform = entry.path("platform");
+            String os = platform.path("os").asText("");
+            String arch = platform.path("architecture").asText("");
+            String digest = entry.path("digest").asText(null);
+            if (digest == null || !DIGEST.matcher(digest).matches() || "unknown".equals(os) || "unknown".equals(arch)) {
+                continue;
+            }
+            if ("linux".equals(os) && "amd64".equals(arch)) {
+                return digest;
+            }
+            if (fallback == null) {
+                fallback = digest;
+            }
+        }
+        return fallback;
+    }
+
+    // size도 응답 본문 값이라 음수·거대값이 올 수 있다. 그대로 더하면 합계가 음수로 뒤집혀
+    // FN-05 디스크 여유 판정이 무조건 통과한다 — 음수는 버리고 포화 덧셈으로 누적한다.
+    private static long sumLayerSizes(JsonNode manifest) {
+        long total = 0L;
+        for (JsonNode layer : manifest.path("layers")) {
+            long size = Math.max(0L, layer.path("size").asLong(0L));
+            total = total + size < total ? Long.MAX_VALUE : total + size;
+        }
+        return total;
+    }
+
+    private static JsonNode readTree(String manifestJson) {
         if (manifestJson == null || manifestJson.isBlank()) {
-            return 0L;
+            return null;
         }
         try {
-            JsonNode root = OBJECT_MAPPER.readTree(manifestJson);
-            long total = 0L;
-            for (JsonNode layer : root.path("layers")) {
-                total += layer.path("size").asLong(0L);
-            }
-            return total;
+            return OBJECT_MAPPER.readTree(manifestJson);
         } catch (Exception e) {
             log.warn("NCR 매니페스트 응답을 파싱할 수 없어 크기를 0으로 처리합니다.", e);
-            return 0L;
+            return null;
         }
     }
 
@@ -350,5 +445,13 @@ public class NcrRegistryClient {
     }
 
     /** FN-05 확정 시점 스냅샷. {@code digest}는 Phase 4-2 무결성 대조, {@code totalSize}는 디스크 판정 기준값이다. */
-    public record ManifestInfo(String digest, long totalSize) {}
+    public record ManifestInfo(String digest, long totalSize) {
+
+        /** 크기를 못 구했다는 표시. 0("크기 0")과 반드시 구분해야 디스크 가드가 fail-open 되지 않는다. */
+        public static final long UNKNOWN_SIZE = -1L;
+
+        public boolean hasUnknownSize() {
+            return totalSize < 0;
+        }
+    }
 }
