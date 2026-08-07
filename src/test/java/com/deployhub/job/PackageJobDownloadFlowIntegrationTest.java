@@ -16,6 +16,8 @@ import com.deployhub.version.dto.SubVersionUpsertBatchRequest;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
 import com.deployhub.version.dto.SubmitStatusChangeRequest;
 import com.deployhub.version.entity.SubmitStatus;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -146,7 +148,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         jdbcTemplate.execute("DELETE FROM sub_version");
         jdbcTemplate.execute("DELETE FROM main_version");
         // 버전명이 테스트마다 고정 문자열이라, 이전 실행이 남긴 .tar가 있으면 다음 실행의
-        // skopeo copy가 "docker-archive doesn't support modifying existing images"로
+        // skopeo copy가 "doesn't support modifying existing images"로
         // 즉시 실패한다 — WORK_DIR 자체 재사용은 프로덕션 재시도 경로에서도 고쳤지만
         // (PackageDownloadService), 테스트 실행 간 격리를 위해 이 dev 프로필 전용
         // 작업 디렉터리(./build/tmp/deployhub-jobs) 전체를 지운다.
@@ -196,6 +198,27 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         }
         assertThat(tarFiles).hasSize(1);
         Path tarPath = tarFiles.get(0);
+
+        // 산출물이 OCI 레이아웃 + 레거시 manifest.json 하이브리드여야 한다. oci-layout이
+        // 사라지면 docker-archive:로 되돌아간 것이고(레이어가 풀려 2~3배로 불어난다),
+        // manifest.json이 없으면 Docker 28 이하가 적재조차 못 한다.
+        String entries = runProcess("tar", "-tf", tarPath.toString());
+        assertThat(entries).contains("oci-layout").contains("manifest.json");
+        assertThat(entries).doesNotContain("layer.tar");
+
+        // 아래 docker load는 호스트의 최신 데몬에서 도는데, Docker 29는 index.json만 보고
+        // manifest.json을 통째로 무시한다 — Config/Layers가 존재하지 않는 blob을 가리켜도
+        // 통과한다(실측). 즉 이 검증이 없으면 조립 로직 전체가 무테스트로 남고, 깨져도
+        // Docker 28 이하를 쓰는 고객사에서만 드러난다.
+        JsonNode legacyManifest = new ObjectMapper()
+                .readTree(runProcess("tar", "-xf", tarPath.toString(), "-O", "manifest.json"))
+                .get(0);
+        assertThat(legacyManifest.get("RepoTags").get(0).asText()).isEqualTo(testImageTag);
+        assertThat(entries).contains(legacyManifest.get("Config").asText());
+        assertThat(legacyManifest.get("Layers")).isNotEmpty();
+        for (JsonNode layer : legacyManifest.get("Layers")) {
+            assertThat(entries).contains(layer.asText());
+        }
 
         String loadOutput = runProcess("docker", "load", "-i", tarPath.toString());
         assertThat(loadOutput).contains(testImageTag);
