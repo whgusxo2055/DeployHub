@@ -64,9 +64,9 @@ class NcrRegistryClientTest {
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
                         .header(
                                 HttpHeaders.WWW_AUTHENTICATE,
-                                "Bearer realm=\"https://auth.example.com/token\",service=\"ncr.example.com\",scope=\"pull\""));
+                                "Bearer realm=\"https://ncr.example.com/auth/token\",service=\"ncr.example.com\",scope=\"pull\""));
 
-        server.expect(requestTo("https://auth.example.com/token?service=ncr.example.com&scope=pull"))
+        server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr.example.com&scope=pull"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, BASIC))
                 .andRespond(withSuccess("{\"token\":\"tok-123\"}", MediaType.APPLICATION_JSON));
 
@@ -81,6 +81,77 @@ class NcrRegistryClientTest {
     }
 
     @Test
+    void 토큰_응답이_text_plain이고_미지의_필드가_있어도_파싱한다() {
+        // dev-ncr-sb 실측: NCR은 JSON을 담고도 Content-Type을 text/plain으로 주고,
+        // 본문에 expires_in/issued_at을 함께 넣는다. 이 테스트가 없던 동안 나머지
+        // 목킹이 전부 APPLICATION_JSON이라 실연동에서만 UnknownContentTypeException이 났다.
+        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
+                        .header(
+                                HttpHeaders.WWW_AUTHENTICATE,
+                                "Bearer realm=\"https://ncr.example.com/auth/token\",service=\"ncr\""));
+
+        server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr"))
+                .andRespond(withSuccess(
+                        "{\"token\":\"tok-123\",\"expires_in\":3600,\"issued_at\":\"2026-08-07T03:49:44Z\"}",
+                        MediaType.TEXT_PLAIN));
+
+        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer tok-123"))
+                .andRespond(withSuccess("{\"tags\":[]}", MediaType.APPLICATION_JSON));
+
+        assertThat(client.get("/v2/repo/tags/list")).contains("tags");
+        server.verify();
+    }
+
+    @Test
+    void 토큰_응답이_JSON이_아니면_도달성_오류로_분류된다() {
+        // 사내망 차단 장비가 평문/HTML을 끼워 넣는 경우 — 자격 증명 문제가 아니므로
+        // E-0401(인증 실패)이 아니라 E-0404(도달 불가)로 떨어져야 오진을 안 만든다.
+        expectChallenge();
+        server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr"))
+                .andRespond(withSuccess("<html>blocked</html>", MediaType.TEXT_HTML));
+
+        assertThatThrownBy(() -> client.get("/v2/repo/tags/list"))
+                .isInstanceOf(ApiException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.REGISTRY_UNREACHABLE);
+    }
+
+    @Test
+    void 토큰_응답이_JSON_리터럴_null이면_NPE가_아니라_분류된_예외가_난다() {
+        // readValue("null", ...)은 예외가 아니라 Java null을 돌려준다 — 이 경로에서
+        // NPE가 새면 RetryExecutor를 그대로 통과해 검증 배치가 통째로 중단된다.
+        expectChallenge();
+        server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr"))
+                .andRespond(withSuccess("null", MediaType.TEXT_PLAIN));
+
+        assertThatThrownBy(() -> client.get("/v2/repo/tags/list")).isInstanceOf(ApiException.class);
+    }
+
+    private void expectChallenge() {
+        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
+                        .header(
+                                HttpHeaders.WWW_AUTHENTICATE,
+                                "Bearer realm=\"https://ncr.example.com/auth/token\",service=\"ncr\""));
+    }
+
+    @Test
+    void realm이_다른_호스트면_자격증명을_보내지_않고_실패한다() {
+        // 이 realm으로 accessKey/secretKey가 Basic 헤더에 담겨 나간다 — 401 헤더를 통제할
+        // 수 있는 쪽이 임의 호스트를 지정하면 자격 증명을 그대로 받아간다.
+        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
+                        .header(
+                                HttpHeaders.WWW_AUTHENTICATE,
+                                "Bearer realm=\"https://attacker.example.com/token\",service=\"ncr\""));
+
+        assertThatThrownBy(() -> client.get("/v2/repo/tags/list")).isInstanceOf(ApiException.class);
+        // attacker.example.com으로는 요청이 안 나간다 — 미등록 요청이면 여기서 실패한다.
+        server.verify();
+    }
+
+    @Test
     void 여러_scheme이_섞인_challenge에서_Bearer_구간만_읽는다() {
         // "Bearer realm=...", 뒤에 다른 scheme(Basic)이 콤마로 이어붙는 경우 —
         // 마지막 realm이 이기면 안 되고, Bearer 구간의 realm만 써야 한다.
@@ -88,9 +159,9 @@ class NcrRegistryClientTest {
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
                         .header(
                                 HttpHeaders.WWW_AUTHENTICATE,
-                                "Bearer realm=\"https://auth.example.com/token\",service=\"ncr.example.com\", Basic realm=\"http://attacker.example.com/\""));
+                                "Bearer realm=\"https://ncr.example.com/auth/token\",service=\"ncr.example.com\", Basic realm=\"http://attacker.example.com/\""));
 
-        server.expect(requestTo("https://auth.example.com/token?service=ncr.example.com"))
+        server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr.example.com"))
                 .andRespond(withSuccess("{\"token\":\"tok-123\"}", MediaType.APPLICATION_JSON));
 
         server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
@@ -260,8 +331,8 @@ class NcrRegistryClientTest {
     void Bearer_재요청_중_연결_실패는_재시도_대상으로_분류된다() {
         server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
-                        .header(HttpHeaders.WWW_AUTHENTICATE, "Bearer realm=\"https://auth.example.com/token\""));
-        server.expect(requestTo("https://auth.example.com/token"))
+                        .header(HttpHeaders.WWW_AUTHENTICATE, "Bearer realm=\"https://ncr.example.com/auth/token\""));
+        server.expect(requestTo("https://ncr.example.com/auth/token"))
                 .andRespond(withSuccess("{\"token\":\"tok-123\"}", MediaType.APPLICATION_JSON));
         // Bearer로 재요청한 두 번째 호출이 연결 실패로 끊긴다 — 예전 구현은 이 예외가
         // 분류 없이 그대로 새어 나가 재시도가 걸리지 않는 버그가 있었다.

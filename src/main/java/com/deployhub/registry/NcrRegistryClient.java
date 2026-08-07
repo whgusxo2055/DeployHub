@@ -6,6 +6,8 @@ import com.deployhub.common.RelativePathGuard;
 import com.deployhub.common.retry.RetryAfterHeader;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryableCallException;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
@@ -337,39 +339,64 @@ public class NcrRegistryClient {
         try {
             realmUri = URI.create(realm);
         } catch (IllegalArgumentException e) {
-            log.warn("NCR Bearer realm URI가 올바르지 않습니다: {}", realm);
+            log.warn("NCR Bearer realm URI가 올바르지 않습니다.");
             throw new ApiException(ErrorCode.REGISTRY_UNAUTHORIZED);
         }
         // realm이 평문 HTTP면 Basic 자격 증명이 그대로 노출된다 — 절대 따라가지 않는다.
-        // host는 고정하지 않는다: Docker Registry v2 스펙상 토큰 발급 서버가 레지스트리와
-        // 다른 서브도메인이어도 정상이라, NCR의 실제 토폴로지를 모르는 채 좁히면 Phase 4
-        // 실연동이 깨질 수 있다.
         if (!"https".equalsIgnoreCase(realmUri.getScheme())) {
-            log.warn("NCR Bearer realm이 HTTPS가 아닙니다: {}", realm);
+            log.warn("NCR Bearer realm이 HTTPS가 아닙니다.");
+            throw new ApiException(ErrorCode.REGISTRY_UNAUTHORIZED);
+        }
+        // 이 realm으로 accessKey/secretKey가 Basic 헤더에 담겨 나간다 — 401 응답 헤더를
+        // 통제할 수 있는 쪽이 임의 호스트를 지정하면 자격 증명을 그대로 받아간다.
+        // dev-ncr-sb 실측상 NCR realm은 https://<registry-host>/auth/token으로 레지스트리와
+        // 동일 호스트라(CLAUDE.md), "다른 서브도메인일 수 있다"던 기존 우려는 부정됐다.
+        // realm 원문은 서버가 통제하는 문자열이라 로그에 넣지 않는다(로그 인젝션).
+        String registryHost = URI.create(resolveBaseUrl(properties.endpoint())).getHost();
+        if (registryHost == null || !registryHost.equalsIgnoreCase(realmUri.getHost())) {
+            log.warn("NCR Bearer realm 호스트가 레지스트리와 다릅니다.");
             throw new ApiException(ErrorCode.REGISTRY_UNAUTHORIZED);
         }
 
-        UriComponentsBuilder uri = UriComponentsBuilder.fromUriString(realm);
-        if (params.get("service") != null) {
-            uri.queryParam("service", params.get("service"));
-        }
-        if (params.get("scope") != null) {
-            uri.queryParam("scope", params.get("scope"));
-        }
-
         try {
-            TokenResponse response = restClient
+            // challenge에서 온 service/scope는 서버가 준 값이다 — 공백·제어문자가 섞이면
+            // toUri()가 IllegalArgumentException을 던진다. try 안에 둬서 분류되지 않은
+            // 예외가 검증 배치를 통째로 중단시키지 않게 한다. 이미 스킴까지 검사한
+            // realmUri를 그대로 쓴다(fromUriString은 파서가 더 느슨해 검사와 어긋날 수 있다).
+            UriComponentsBuilder uri = UriComponentsBuilder.fromUri(realmUri);
+            if (params.get("service") != null) {
+                uri.queryParam("service", params.get("service"));
+            }
+            if (params.get("scope") != null) {
+                uri.queryParam("scope", params.get("scope"));
+            }
+
+            // 본문을 String으로 받아 직접 파싱한다 — NCR의 토큰 엔드포인트는 JSON을
+            // 담고도 Content-Type을 text/plain으로 준다(dev-ncr-sb 실측). 타입 바인딩
+            // (.body(TokenResponse.class))을 쓰면 Jackson 컨버터가 붙지 않아
+            // UnknownContentTypeException으로 죽는다.
+            String body = restClient
                     .get()
                     .uri(uri.build().toUri())
                     .header(HttpHeaders.AUTHORIZATION, basicAuthHeader())
                     .retrieve()
-                    .body(TokenResponse.class);
-            String token = response == null ? null : response.anyToken();
+                    .body(String.class);
+            // 본문이 JSON 리터럴 null이면 readValue는 예외가 아니라 null을 돌려준다 —
+            // 한 줄로 이어 붙이면 anyToken()에서 NPE가 나고, NPE는 아래 catch 어디에도
+            // 안 걸려 RetryExecutor를 그대로 통과해 검증 배치를 통째로 중단시킨다.
+            TokenResponse parsed = body == null ? null : OBJECT_MAPPER.readValue(body, TokenResponse.class);
+            String token = parsed == null ? null : parsed.anyToken();
             if (token == null) {
                 log.warn("NCR Bearer 토큰 응답이 비어 있습니다.");
                 throw new ApiException(ErrorCode.REGISTRY_UNAUTHORIZED);
             }
             return token;
+        } catch (JsonProcessingException | IllegalArgumentException ex) {
+            // 본문이 JSON이 아닌 건 인증 실패가 아니다 — 자격 증명을 의심하게 만드는
+            // E-0401 대신 도달성 문제로 분류한다. 사내망 차단 장비가 평문 응답을 끼워
+            // 넣는 경우가 정확히 이 경로다(CLAUDE.md). 본문은 로그에 남기지 않는다.
+            log.warn("NCR Bearer 토큰 응답을 해석할 수 없습니다: {}", ex.getClass().getSimpleName());
+            throw new ApiException(ErrorCode.REGISTRY_UNREACHABLE);
         } catch (RestClientResponseException ex) {
             log.warn("NCR Bearer 토큰 발급 실패: {}", ex.getStatusCode());
             throw new ApiException(ErrorCode.REGISTRY_UNAUTHORIZED);
@@ -438,6 +465,9 @@ public class NcrRegistryClient {
         return true;
     }
 
+    // NCR은 expires_in/issued_at도 함께 준다 — OBJECT_MAPPER는 기본 설정(미지의 필드에 실패)이라
+    // 이 애너테이션이 없으면 토큰 파싱이 통째로 깨진다.
+    @JsonIgnoreProperties(ignoreUnknown = true)
     private record TokenResponse(String token, String access_token) {
         String anyToken() {
             return token != null ? token : access_token;

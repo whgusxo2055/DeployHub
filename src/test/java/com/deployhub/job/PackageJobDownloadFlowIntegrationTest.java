@@ -26,6 +26,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
@@ -66,6 +67,12 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
 
     private static final boolean USE_REAL_NCR = System.getenv("NCR_TEST_IMAGE_TAG") != null;
+
+    // 로컬 registry:2의 alpine은 11MB라 60초면 충분하지만, 실 NCR의 이미지는 수 GB다
+    // (dev-ncr-sb 실측: 4.5GB짜리 OCI index가 172초). 실 NCR 모드에서만 넉넉히 잡는다 —
+    // 로컬 모드 타임아웃을 같이 늘리면 진짜 멈춤을 60초가 아니라 15분 뒤에 알게 된다.
+    private static final Duration DONE_TIMEOUT = Duration.ofSeconds(USE_REAL_NCR ? 900 : 60);
+    private static final int PROCESS_TIMEOUT_SECONDS = USE_REAL_NCR ? 900 : 60;
     private static final String TEST_REPOSITORY = "deployhub-test/alpine";
     private static final String TEST_TAG = "3.19";
 
@@ -177,7 +184,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         ResponseEntity<PackageJobDetailResponse> created = createPackageJob(versionName, List.of(testImageTag));
         assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
 
-        await().atMost(Duration.ofSeconds(60)).untilAsserted(() -> assertThat(getJob(versionName)
+        await().atMost(DONE_TIMEOUT).untilAsserted(() -> assertThat(getJob(versionName)
                         .getBody()
                         .job()
                         .status())
@@ -269,7 +276,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(retried.getBody().job().status()).isEqualTo("DOWNLOADING");
         assertThat(retried.getBody().items().get(0).status()).isEqualTo("PENDING");
 
-        await().atMost(Duration.ofSeconds(60)).untilAsserted(() -> assertThat(getJob(versionName)
+        await().atMost(DONE_TIMEOUT).untilAsserted(() -> assertThat(getJob(versionName)
                         .getBody()
                         .job()
                         .status())
@@ -354,11 +361,26 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
     private static String runProcess(String... command) throws IOException, InterruptedException {
         Process process =
                 new ProcessBuilder(command).redirectErrorStream(true).start();
-        String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        boolean finished = process.waitFor(60, TimeUnit.SECONDS);
-        if (!finished || process.exitValue() != 0) {
-            throw new IllegalStateException("명령 실행 실패(%s): %s".formatted(new ArrayList<>(List.of(command)), output));
+        // 출력을 별도 스레드로 비우면서 waitFor 한다 — 같은 스레드에서 readAllBytes()를
+        // 먼저 부르면 EOF가 프로세스 종료 후에야 오므로 거기서 무한정 막히고, 뒤의
+        // waitFor는 이미 끝난 프로세스를 확인만 해 타임아웃이 무력해진다(CLAUDE.md).
+        CompletableFuture<String> output = CompletableFuture.supplyAsync(() -> {
+            try {
+                return new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                return "(출력을 읽지 못했습니다: %s)".formatted(e);
+            }
+        });
+        boolean finished = process.waitFor(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            throw new IllegalStateException(
+                    "명령이 %d초 안에 끝나지 않았습니다(%s)".formatted(PROCESS_TIMEOUT_SECONDS, List.of(command)));
         }
-        return output;
+        String captured = output.join();
+        if (process.exitValue() != 0) {
+            throw new IllegalStateException("명령 실행 실패(%s): %s".formatted(new ArrayList<>(List.of(command)), captured));
+        }
+        return captured;
     }
 }
