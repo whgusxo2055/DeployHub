@@ -52,6 +52,19 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         jdbcTemplate.execute("DELETE FROM main_version");
     }
 
+    /**
+     * 매핑되지 않은 경로는 정적 리소스 조회를 거쳐 {@code NoResourceFoundException}이 되는데,
+     * 이걸 안 잡으면 500 + 스택트레이스가 나가 클라이언트의 URL 오타가 서버 장애로 보고된다
+     * (Phase 7 실서버 검증에서 발견).
+     */
+    @Test
+    void 매핑되지_않은_경로는_500이_아니라_404_E_9001을_돌려준다() {
+        ResponseEntity<String> response = restTemplate.getForEntity("/api/does-not-exist", String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).contains("E-9001");
+    }
+
     @Test
     void 메인버전_등록부터_패키징_가능_여부_반영까지_전체_흐름이_동작한다() {
         // "2026.09.01"처럼 점을 포함한 경로 변수가 깨지지 않는지도 함께 검증한다

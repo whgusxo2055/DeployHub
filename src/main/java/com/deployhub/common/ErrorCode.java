@@ -76,7 +76,12 @@ public enum ErrorCode {
 
     // 어느 도메인 대역에도 속할 수 없는, 예상치 못한 오류에만 쓰는 유일한 예외.
     // 미리 분류할 수 없는 오류이므로 도메인 코드를 억지로 붙이지 않는다.
-    INTERNAL_ERROR("E-9000", HttpStatus.INTERNAL_SERVER_ERROR, "서버 내부 오류가 발생했습니다.");
+    INTERNAL_ERROR("E-9000", HttpStatus.INTERNAL_SERVER_ERROR, "서버 내부 오류가 발생했습니다."),
+
+    // 구현계획서 주요 예외 목록에 없는 코드다 — 오타 난 URL은 어느 도메인에도 속하지
+    // 않는데, 이걸 E-9000으로 흘리면 클라이언트 실수가 서버 장애로 보고된다(Phase 7
+    // 실서버 검증에서 발견).
+    ENDPOINT_NOT_FOUND("E-9001", HttpStatus.NOT_FOUND, "요청한 경로를 찾을 수 없습니다.");
 
     private final String code;
     private final HttpStatus httpStatus;

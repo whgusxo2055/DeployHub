@@ -7,6 +7,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /** 4.3절 오류 응답 스키마를 모든 컨트롤러에 일괄 적용한다. */
 @Slf4j
@@ -44,6 +45,22 @@ public class GlobalExceptionHandler {
                         ErrorCode.INVALID_QUERY_PARAMETER,
                         ErrorCode.INVALID_QUERY_PARAMETER.getDefaultMessage(),
                         List.of("%s: '%s'".formatted(ex.getName(), ex.getValue()))));
+    }
+
+    /**
+     * 매핑되지 않은 경로는 정적 리소스 조회로 넘어가고, 거기서도 없으면 이 예외가 난다.
+     * 없으면 {@code handleUnexpected}가 500 + 스택트레이스로 처리해 <b>클라이언트의 URL
+     * 오타가 서버 장애로 보고된다</b> — 오류 로그도 스택트레이스로 뒤덮인다
+     * ({@code MethodArgumentTypeMismatchException}을 따로 잡아 둔 것과 같은 이유).
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiErrorResponse> handleNoResource(NoResourceFoundException ex) {
+        log.warn("매핑되지 않은 경로 요청: {} {}", ex.getHttpMethod(), ex.getResourcePath());
+        return ResponseEntity.status(ErrorCode.ENDPOINT_NOT_FOUND.getHttpStatus())
+                .body(ApiErrorResponse.of(
+                        ErrorCode.ENDPOINT_NOT_FOUND,
+                        ErrorCode.ENDPOINT_NOT_FOUND.getDefaultMessage(),
+                        List.of()));
     }
 
     @ExceptionHandler(Exception.class)
