@@ -2,12 +2,16 @@ package com.deployhub.job.controller;
 
 import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
+import com.deployhub.job.dto.PackageCleanupResponse;
+import com.deployhub.job.dto.PackageFilesResponse;
 import com.deployhub.job.dto.PackageItemRetryRequest;
 import com.deployhub.job.dto.PackageJobCreateRequest;
 import com.deployhub.job.dto.PackageJobDetailResponse;
 import com.deployhub.job.dto.PackageJobResponse;
 import com.deployhub.job.entity.JobStatus;
 import com.deployhub.job.service.JobOrchestrator;
+import com.deployhub.job.service.PackageCleanupService;
+import com.deployhub.job.service.PackageFileService;
 import com.deployhub.job.service.PackageJobService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -19,6 +23,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -38,6 +43,8 @@ public class PackageJobController {
 
     private final PackageJobService packageJobService;
     private final JobOrchestrator jobOrchestrator;
+    private final PackageFileService packageFileService;
+    private final PackageCleanupService packageCleanupService;
 
     @Operation(summary = "직전 메인버전 대비 변경된 컴포넌트 조회 (FN-03)")
     @ApiResponse(responseCode = "404", description = "E-0101: 메인버전 없음")
@@ -98,5 +105,38 @@ public class PackageJobController {
     public List<PackageJobResponse> listJobs(
             @Parameter(description = "상태 필터") @RequestParam(required = false) JobStatus status) {
         return packageJobService.list(status);
+    }
+
+    @Operation(
+            summary = "업로드 파일 URL 목록 조회 (FN-10)",
+            description = "폴더 조직 범위 공유 링크(기본 전달 창구)와 파일별 URL을 함께 제공한다.")
+    @ApiResponse(responseCode = "404", description = "E-0306: 패키지 Job 없음")
+    @ApiResponse(responseCode = "409", description = "E-1201: Job 미완료 — details에 현재 상태·진행률")
+    @GetMapping("/api/package-jobs/{versionName}/files")
+    public PackageFilesResponse getFiles(@PathVariable String versionName) {
+        return packageFileService.listFiles(versionName);
+    }
+
+    @Operation(summary = "패키지 수동 정리 (FN-11)", description = "SharePoint 폴더와 로컬 작업 디렉터리를 즉시 삭제한다. Job 이력 행은 남는다.")
+    @ApiResponse(responseCode = "404", description = "E-0306: 패키지 Job 없음")
+    @ApiResponse(responseCode = "409", description = "E-1404: 진행 중인 Job")
+    @DeleteMapping("/api/package-jobs/{versionName}/package")
+    public PackageCleanupResponse deletePackage(@PathVariable String versionName) {
+        return packageCleanupService.cleanupOne(versionName);
+    }
+
+    /**
+     * {@code dryRun} 기본값이 {@code true}다 — 인증이 없는 API라 파라미터 없는 POST 한 방이
+     * SharePoint 폴더를 실제로 지우면 안 된다(Swagger UI의 "Try it out" 기본 상태가 곧
+     * 실삭제가 된다). 실행은 {@code dryRun=false}로 명시해야 한다.
+     */
+    @Operation(
+            summary = "보존·정리 배치 수동 실행 (FN-11)",
+            description = "기본값은 대상만 산출하는 dry run이다. 실제 삭제는 dryRun=false를 명시해야 한다.")
+    @PostMapping("/api/admin/cleanup")
+    public PackageCleanupResponse runCleanup(
+            @Parameter(description = "false를 명시해야 실제로 삭제한다") @RequestParam(defaultValue = "true")
+                    boolean dryRun) {
+        return packageCleanupService.cleanup(dryRun, "api");
     }
 }

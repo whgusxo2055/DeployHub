@@ -31,6 +31,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -42,6 +44,9 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @Transactional(readOnly = true)
 public class PackageJobService {
+
+    /** 구현계획서 Phase 6-4 감사 로그 ({@code PackageCleanupService}와 같은 로거를 공유한다). */
+    private static final Logger AUDIT = LoggerFactory.getLogger("audit");
 
     private final PackageJobRepository packageJobRepository;
     private final PackageItemRepository packageItemRepository;
@@ -119,6 +124,16 @@ public class PackageJobService {
             packageItemRepository.save(
                     PackageItem.builder().versionName(versionName).imageTag(tag).build());
         }
+
+        // Phase 6-4 감사 로그 — 누가 어떤 매니페스트를 강제 여부와 함께 확정했는지 남긴다
+        // (구현계획서 601행). package_job은 메인버전당 1건이라 force 재생성 시 이전 이력이
+        // 덮어써지므로(3장 리스크 5) DB만으로는 이 흔적이 남지 않는다.
+        AUDIT.info(
+                "job-created versionName={} createdBy={} force={} imageTags={}",
+                versionName,
+                request.createdBy(),
+                request.force(),
+                targetTags);
 
         List<PackageItem> items = packageItemRepository.findByVersionNameOrderByImageTagAsc(versionName);
         return PackageJobDetailResponse.builder()

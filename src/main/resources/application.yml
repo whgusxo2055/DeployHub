@@ -84,6 +84,15 @@ deployhub:
   upload:
     chunk-size: ${UPLOAD_CHUNK_SIZE:10485760}
 
+  # Phase 6 — FN-11 보존·정리 배치 (0.6절). days/count는 SharePoint 폴더,
+  # local-cleanup-delay-hours는 중계 서버 작업 디렉터리에 적용된다. cron은 0.6절 설정값
+  # 표에 없어 env var로 노출하지 않는다 — 바꿀 일이 생기면 그때 꺼낸다.
+  retention:
+    days: ${RETENTION_DAYS:90}
+    count: ${RETENTION_COUNT:10}
+    local-cleanup-delay-hours: ${LOCAL_CLEANUP_DELAY_HOURS:24}
+    cron: "0 0 3 * * *"
+
 springdoc:
   api-docs:
     path: /v3/api-docs

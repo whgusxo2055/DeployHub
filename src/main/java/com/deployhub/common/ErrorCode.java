@@ -58,6 +58,16 @@ public enum ErrorCode {
     RETRY_REJECTED_JOB_NOT_FAILED("E-0702", HttpStatus.CONFLICT, "완료되었거나 진행 중인 Job은 재시도할 수 없습니다."),
     WORK_DIR_LOST("E-0703", HttpStatus.CONFLICT, "작업 디렉터리가 소실되었습니다. force=true로 전체 재수집을 진행할 수 있습니다."),
 
+    // E-12xx 결과 제공 (Phase 6, FN-10).
+    PACKAGE_NOT_READY("E-1201", HttpStatus.CONFLICT, "패키지가 아직 완료되지 않았습니다."),
+
+    // E-14xx 보존·정리 (Phase 6, FN-11). E-1401(404 이미 삭제됨 → 정상 간주)·E-1402(403 →
+    // 해당 건만 건너뜀)·E-1403(디렉터리 삭제 실패 → 다음 배치 재시도)은 여기 없다 —
+    // E-1501과 같은 이유로 배치 내부에서 로그로만 남고 HTTP로 나가지 않는다.
+    // E-1404는 구현계획서 주요 예외 목록에 없는 코드다 — 수동 정리 API가 진행 중인 Job을
+    // 거부하는 사유가 E-14xx 어느 것과도 겹치지 않아 새로 부여했다(E-0305 선례).
+    PACKAGE_CLEANUP_BLOCKED("E-1404", HttpStatus.CONFLICT, "진행 중인 Job의 패키지는 정리할 수 없습니다."),
+
     // E-13xx/E-15xx Job 오케스트레이션 동시성 (Phase 3). E-1501(기동 시 고아 Job 정리)은
     // 여기 없다 — E-0403과 같은 이유로, HTTP 응답으로 나가지 않고 OrphanJobCleaner가
     // 로그에만 남기는 코드다.

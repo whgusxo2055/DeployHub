@@ -1,6 +1,3 @@
-# ponytail: skopeo 설치는 Phase 4(FN-06-1)에서 실제 사용 시점에 추가한다.
-# 지금 넣어봐야 아무도 호출하지 않는 바이너리만 이미지에 얹는 셈이라 뒤로 미룬다.
-
 FROM eclipse-temurin:17-jdk AS build
 WORKDIR /workspace
 
@@ -12,6 +9,19 @@ COPY src src
 RUN ./gradlew bootJar --no-daemon
 
 FROM eclipse-temurin:17-jre
+
+# skopeo는 PackageDownloadService(FN-06-1)가 ProcessBuilder로 직접 부르는 런타임 하드
+# 의존이다 — 없으면 StartupChecks가 E-0605로 기동을 막는다(NCR_CLI_PATH 기본값
+# /usr/bin/skopeo). tar도 후처리(appendLegacyManifest)의 하드 의존인데 베이스 이미지에
+# 이미 들어 있다.
+# skopeo 버전은 베이스 이미지의 Ubuntu 릴리즈를 따라간다 — 릴리즈가 바뀌면 하이브리드
+# 아카이브 조립이 의존하는 동작(목적지 전체 참조로 index.json의 ref.name 채우기)이 조용히
+# 갈릴 수 있어, 빌드 로그에 버전을 남겨 회귀를 알아챌 수 있게 한다.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends skopeo \
+    && rm -rf /var/lib/apt/lists/* \
+    && skopeo --version
+
 WORKDIR /app
 COPY --from=build /workspace/build/libs/*.jar app.jar
 

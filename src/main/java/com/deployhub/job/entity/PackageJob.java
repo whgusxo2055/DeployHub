@@ -59,10 +59,22 @@ public class PackageJob {
         return status != JobStatus.FAILED;
     }
 
-    /** 종료 상태(DONE/FAILED)면 finishedAt을 찍고, 아니면 비운다. */
+    /**
+     * 종료 상태(DONE/FAILED)면 finishedAt을 찍고, 아니면 비운다.
+     *
+     * <p>비종료 상태로 가면 {@code deletedAt}도 함께 비운다 — 다시 도는 Job은 정의상 정리된
+     * 상태가 아니다. {@code resetForRerun}(force 재생성)만 비우고 {@code retry()}
+     * (FAILED→DOWNLOADING)를 빠뜨리면, 정리된 뒤 재시도해 성공한 Job이 새 SharePoint 폴더를
+     * 가진 채 {@code deleted_at}을 달고 있어 정리 배치의 {@code alive} 필터에서 영구히 빠지고
+     * FN-10이 멀쩡한 URL을 "만료됨"으로 표시한다. 전이 지점이 여기 하나라 여기서 막는다.
+     */
     public void changeStatus(JobStatus next) {
+        boolean terminal = next == JobStatus.DONE || next == JobStatus.FAILED;
         this.status = next;
-        this.finishedAt = (next == JobStatus.DONE || next == JobStatus.FAILED) ? Instant.now() : null;
+        this.finishedAt = terminal ? Instant.now() : null;
+        if (!terminal) {
+            this.deletedAt = null;
+        }
     }
 
     /**
@@ -78,6 +90,15 @@ public class PackageJob {
         this.createdBy = createdBy;
         this.finishedAt = null;
         this.deletedAt = null;
+    }
+
+    /**
+     * FN-11 보존·정리 — SharePoint 폴더를 지운 시각을 남긴다. 행 자체는 이력 보존을 위해
+     * 지우지 않는다(구현계획서 597행). {@code sp_folder_id}/{@code sp_folder_url}도 그대로
+     * 둔다 — 어느 폴더가 정리됐는지가 감사 흔적의 일부다.
+     */
+    public void markDeleted() {
+        this.deletedAt = Instant.now();
     }
 
     /** FN-08 폴더 확보(생성 또는 재사용) 결과를 기록한다. 재사용이면 같은 값을 다시 써도 무해하다. */

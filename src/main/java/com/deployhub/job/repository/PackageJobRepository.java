@@ -23,4 +23,15 @@ public interface PackageJobRepository extends JpaRepository<PackageJob, String> 
 
     /** Job 목록 API의 상태 필터와 기동 시 고아 Job 정리가 함께 쓴다. */
     List<PackageJob> findByStatusInOrderByCreatedAtDesc(Collection<JobStatus> statuses);
+
+    /**
+     * FN-11 보존·정리 배치(Phase 6). 정렬이 곧 "최근 RETENTION_COUNT건 보호"의 기준이라
+     * 배치가 재정렬하지 않고 앞에서부터 세기만 하면 된다. 메인버전당 Job이 1건이라 전건을
+     * 메모리로 가져와도 되는 규모다 — 기한·보호 건수 판정은 자바에서 한다
+     * ({@code status IN (...)} + {@code ORDER BY finished_at DESC}라 filesort가 붙지만
+     * 전건이 수십 행 규모라 무해하다).
+     * 여기서 나온 목록은 스냅샷이므로 실제 삭제 전에 {@code PackagePurgeService}가 락을
+     * 잡고 상태를 다시 확인한다.
+     */
+    List<PackageJob> findByStatusInOrderByFinishedAtDesc(Collection<JobStatus> statuses);
 }
