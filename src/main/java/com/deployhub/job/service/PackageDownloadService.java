@@ -11,7 +11,6 @@ import com.deployhub.registry.ImageReference;
 import com.deployhub.registry.NcrProperties;
 import com.deployhub.registry.NcrRegistryClient;
 import com.deployhub.registry.NcrRegistryClient.ManifestInfo;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -29,7 +28,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -46,13 +44,11 @@ public class PackageDownloadService {
 
     // oci-archive:는 압축 레이어를 그대로 담아 산출 tar가 layers[].size 합계와 거의 같다(+0.2%).
     private static final double REQUIRED_FREE_SPACE_RATIO = 1.2;
-    /** 아카이브에서 읽은 digest를 blob 경로로 조립하기 전 형식 확인(NCR·skopeo 모두 sha256만 쓴다). */
-    private static final Pattern BLOB_DIGEST = Pattern.compile("sha256:[a-f0-9]{64}");
     // "no space left"가 빠지면 디스크가 찬 상태에서 수 GB 재다운로드를 maxRetries만큼 반복한다.
     private static final Pattern NON_RETRYABLE_STDERR = Pattern.compile(
             "(?i)unauthorized|forbidden|\\b401\\b|\\b403\\b|\\b404\\b|manifest unknown|not found|no space left");
     private static final int STDERR_CAPTURE_LIMIT = 8192;
-    // Boot 빈이 아니라 기본 설정 매퍼 — 아카이브 JSON만 다뤄 Spring 컨텍스트 설정과 무관해야 한다.
+    // Boot 빈이 아니라 기본 설정 매퍼 — authfile 직렬화 전용이라 Spring 컨텍스트 설정과 무관해야 한다.
     private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
 
     private final PackageItemRepository packageItemRepository;
@@ -130,7 +126,13 @@ public class PackageDownloadService {
             log.warn("예상 크기를 알 수 없는 항목이 있어 디스크 사전 확인을 건너뜁니다.");
             return;
         }
-        long expectedTotal = infos.stream().mapToLong(ManifestInfo::totalSize).sum();
+        // 포화 덧셈 — 항목이 각각 Long.MAX_VALUE로 포화하면 단순 합은 음수로 뒤집혀
+        // 아래 비교가 무조건 통과한다(디스크 가드 fail-open). sumLayerSizes와 같은 패턴이다.
+        long expectedTotal = 0L;
+        for (ManifestInfo info : infos) {
+            long size = info.totalSize();
+            expectedTotal = expectedTotal + size < expectedTotal ? Long.MAX_VALUE : expectedTotal + size;
+        }
         long required = (long) (expectedTotal * REQUIRED_FREE_SPACE_RATIO);
         long usable = imagesDir.toFile().getUsableSpace();
         if (usable < required) {
@@ -162,12 +164,6 @@ public class PackageDownloadService {
             deleteQuietly(tarPath);
             SkopeoResult result = runSkopeo(ref, tarPath, authFile);
             if (result.exitCode() == 0) {
-                // 후처리 실패는 조립 로직 문제라 재시도해도 같다 — 다시 받지 않고 항목 실패로 끝낸다.
-                String postProcessFailure = appendLegacyManifest(ref, tarPath);
-                if (postProcessFailure != null) {
-                    deleteQuietly(tarPath);
-                    return failItem(item, "E-0604: 다운로드 파일 후처리에 실패했습니다.", postProcessFailure);
-                }
                 return handleSuccess(item, expected, ref, tarPath);
             }
 
@@ -188,8 +184,10 @@ public class PackageDownloadService {
     }
 
     /**
-     * digest 대조는 아카이브 안 값이 아니라 REST로 재조회한 값으로 한다 — 태그가 인덱스를 가리키면
-     * skopeo가 플랫폼 하나로 평탄화해 담아 아카이브 digest는 애초에 다른 값이다(항상 오탐).
+     * 확정 시점과 다운로드 직후를 REST로 두 번 조회해 대조한다 — 받는 도중 같은 태그가 다시 push된
+     * 경우를 잡는 검사이지, 아카이브가 온전한지 보는 검사가 아니다. 후자는 skopeo가 copy 중 blob마다
+     * digest를 검증하고 {@code --preserve-digests}가 보존 실패 시 0이 아닌 코드로 끝내 이미 담보된다
+     * (아카이브를 다시 읽으면 파일 전체를 훑게 되므로 여기서 재검증하지 않는다).
      * digest가 하나라도 null이면 실패로 처리한다 — null==null 일치 판정은 fail-open이다.
      */
     private boolean handleSuccess(PackageItem item, ManifestInfo expected, ImageReference ref, Path tarPath) {
@@ -245,14 +243,32 @@ public class PackageDownloadService {
         command.add("copy");
         command.add("--authfile");
         command.add(authFile.path().toString());
+        // 원본 바이트를 그대로 담아 아카이브 digest가 레지스트리 digest와 같아진다. 포맷을
+        // 강제하면(--format v2s2 등) 안 된다 — 인덱스에 붙은 buildx 어테스테이션에서
+        // "Unknown media type ... vnd.in-toto+json"으로 죽는다(NCR 12개 중 3개가 해당).
+        command.add("--preserve-digests");
+        // 인덱스를 평탄화하지 않고 통째로 담는다. 빠지면 skopeo가 플랫폼 하나만 골라
+        // 담아 아카이브 digest가 인덱스 digest와 달라진다(무결성 대조가 항상 오탐).
+        command.add("--multi-arch");
+        command.add("all");
         if (isPlainHttp(ncrProperties.endpoint())) {
             command.add("--src-tls-verify=false");
         }
         command.add("docker://%s/%s:%s".formatted(host, ref.repository(), ref.tag()));
         // oci-archive:는 레이어 압축을 보존한다(docker-archive:는 전부 풀어 담아 산출물이 몇 배로 불어난다).
-        // 목적지 참조는 "저장소:태그" 전체를 넘길 것 — 이 값이 index.json의 ref.name이 되고
-        // Docker 29가 태그를 거기서 복원한다(태그만 넘기면 "v1.0.0:latest"로 적재된다).
-        command.add("oci-archive:%s:%s:%s".formatted(tarPath, ref.repository(), ref.tag()));
+        //
+        // 목적지 참조는 반드시 **레지스트리 호스트가 붙은 완전 수식 참조**여야 한다. 이 값이
+        // index.json의 org.opencontainers.image.ref.name이 되는데, containerd 이미지 저장소는
+        // 그 문자열을 이미지 이름으로 그대로 기록하기 때문이다. 호스트가 없으면("acme/x:1.0")
+        // Docker는 조회할 때 docker.io/를 붙여 정규화하므로 기록된 이름과 영영 안 맞는다 —
+        // 적재는 되는데 `docker run acme/x:1.0`이 Docker Hub에서 받으려 하고(pull access denied),
+        // inspect/tag/rmi가 전부 "No such image"가 되며 `docker images`에 같은 행이 두 번 뜬다.
+        //
+        // 그 호스트로 실제 NCR 엔드포인트를 쓰면 안 된다 — 아카이브는 SharePoint를 거쳐 고객사로
+        // 나가므로 사내 레지스트리 주소가 그대로 실린다. 대신 Docker의 기본 레지스트리인
+        // docker.io를 명시한다. 조회 시 정규화 결과와 같아져 이름이 살아나고, `docker images`는
+        // docker.io/ 접두사를 표시에서 떼므로 고객사가 보는 이름은 "acme/x:1.0" 그대로다(실측).
+        command.add("oci-archive:%s:docker.io/%s:%s".formatted(tarPath, canonicalRepository(ref), ref.tag()));
 
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
@@ -295,125 +311,6 @@ public class PackageDownloadService {
         }
     }
 
-    /**
-     * OCI 아카이브에 레거시 {@code manifest.json}을 덧붙인다 — Docker 28 이하는 이게 없으면 적재를 못 하고
-     * 태그도 여기 {@code RepoTags}로만 복원한다(29는 {@code index.json}의 ref.name을 본다).
-     * 풀었다 다시 묶지 않고 {@code tar -r}로 덧붙인다 — 10GB급에서 재압축은 디스크를 두 배로 쓴다.
-     *
-     * @return 실패 사유, 성공이면 {@code null}
-     */
-    private String appendLegacyManifest(ImageReference ref, Path tarPath) {
-        Path workDirectory = null;
-        try {
-            // skopeo copy는 인덱스도 플랫폼 하나로 평탄화하므로 manifests[0]은 항상 이미지 매니페스트다.
-            JsonNode index = JSON_MAPPER.readTree(readArchiveEntry(tarPath, "index.json"));
-            JsonNode manifest = JSON_MAPPER.readTree(
-                    readArchiveEntry(tarPath, blobPath(index.path("manifests").path(0).path("digest").asText())));
-            List<String> layers = new ArrayList<>();
-            for (JsonNode layer : manifest.path("layers")) {
-                // oci-archive:는 원본 압축을 보존한다 — zstd 레이어는 Docker 28 이하에서만 실패해
-                // 최신 데몬으로는 못 잡는다. 고객사에서 터지기 전에 여기서 끊는다.
-                if (layer.path("mediaType").asText().contains("zstd")) {
-                    return "지원하지 않는 레이어 압축(zstd)입니다 — Docker 28 이하가 적재하지 못합니다.";
-                }
-                layers.add(blobPath(layer.path("digest").asText()));
-            }
-            if (layers.isEmpty()) {
-                return "아카이브 매니페스트에 레이어가 없습니다.";
-            }
-            Map<String, Object> entry = Map.of(
-                    "Config", blobPath(manifest.path("config").path("digest").asText()),
-                    "RepoTags", List.of(ref.repository() + ":" + ref.tag()),
-                    "Layers", layers);
-            workDirectory = Files.createTempDirectory("deployhub-manifest-");
-            Files.writeString(
-                    workDirectory.resolve("manifest.json"), JSON_MAPPER.writeValueAsString(List.of(entry)));
-            ProcessResult appended = runProcess(
-                    List.of("tar", "-rf", tarPath.toString(), "-C", workDirectory.toString(), "manifest.json"), false);
-            if (appended.exitCode() != 0) {
-                return "tar 덧붙이기 실패(exit=%d): %s".formatted(appended.exitCode(), appended.text());
-            }
-            return null;
-        } catch (IOException | ArchiveException e) {
-            // 인터럽트는 runProcess가 다른 타입으로 던져 여기 안 걸린다 — 걸리면 셧다운이 "항목 영구 FAILED"로 굳는다.
-            return e.getMessage() != null ? e.getMessage() : e.toString();
-        } finally {
-            if (workDirectory != null) {
-                deleteQuietly(workDirectory.resolve("manifest.json"));
-                deleteQuietly(workDirectory);
-            }
-        }
-    }
-
-    private byte[] readArchiveEntry(Path tarPath, String entryName) {
-        // ponytail: skopeo가 index.json을 끝에서 두 번째로 쓰기 때문에 --occurrence=1이어도
-        // 사실상 끝까지 훑는다 — 후처리가 아카이브 크기의 약 2배를 읽는다.
-        ProcessResult result =
-                runProcess(List.of("tar", "-xf", tarPath.toString(), "-O", "--occurrence=1", entryName), true);
-        if (result.exitCode() != 0 || result.output().length == 0) {
-            // exit=-1이면 tar 자체를 실행 못 한 경우로, 사유가 output에 들어 있다.
-            throw new ArchiveException(
-                    "아카이브에서 %s를 읽지 못했습니다(exit=%d). %s"
-                            .formatted(entryName, result.exitCode(), result.text()));
-        }
-        return result.output();
-    }
-
-    private static String blobPath(String digest) {
-        if (!BLOB_DIGEST.matcher(digest).matches()) {
-            // 정상이면 걸릴 일이 없다 — 걸리면 형식이 바뀐 것이라 tar 인자로 넘기지 않고 끊는다.
-            throw new ArchiveException("아카이브의 digest 형식이 올바르지 않습니다.");
-        }
-        return "blobs/sha256/" + digest.substring("sha256:".length());
-    }
-
-    /**
-     * tar처럼 출력이 작은 보조 프로세스 전용. 출력을 별도 스레드로 비우면서 대기해야 타임아웃이 동작한다 —
-     * 같은 스레드에서 EOF까지 읽으면 EOF가 프로세스 종료 때 와서 뒤의 {@code waitFor(timeout)}가 무력해진다.
-     *
-     * @param captureStdout true면 stdout만(stderr를 섞으면 JSON이 깨진다), false면 stderr를 합쳐 받는다.
-     */
-    private ProcessResult runProcess(List<String> command, boolean captureStdout) {
-        ProcessBuilder pb = new ProcessBuilder(command);
-        pb.redirectInput(ProcessBuilder.Redirect.from(nullDevice()));
-        if (captureStdout) {
-            pb.redirectError(ProcessBuilder.Redirect.DISCARD);
-        } else {
-            pb.redirectErrorStream(true);
-        }
-        Process process;
-        try {
-            process = pb.start();
-        } catch (IOException e) {
-            return new ProcessResult(
-                    -1, "%s 실행 실패: %s".formatted(command.get(0), e.getMessage()).getBytes(StandardCharsets.UTF_8));
-        }
-        AtomicReference<byte[]> captured = new AtomicReference<>(new byte[0]);
-        Thread reader = new Thread(() -> {
-            try (var stream = process.getInputStream()) {
-                captured.set(stream.readAllBytes());
-            } catch (IOException ignored) {
-                // 강제 종료로 스트림이 닫히는 경우가 대부분 — 부분 출력은 버린다.
-            }
-        });
-        reader.setDaemon(true);
-        reader.start();
-        try {
-            boolean finished = process.waitFor(skopeoTimeoutSeconds, TimeUnit.SECONDS);
-            if (!finished) {
-                process.destroyForcibly();
-                return new ProcessResult(-1, "%s 타임아웃".formatted(command.get(0)).getBytes(StandardCharsets.UTF_8));
-            }
-            reader.join(Duration.ofSeconds(5).toMillis());
-            return new ProcessResult(process.exitValue(), captured.get());
-        } catch (InterruptedException e) {
-            // 고아 프로세스를 남기지 않는다. ArchiveException이 아닌 타입이라 항목 실패로 흡수되지 않는다.
-            process.destroyForcibly();
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("아카이브 후처리 대기 중 인터럽트되었습니다.", e);
-        }
-    }
-
     private static java.io.File nullDevice() {
         return new java.io.File(System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win") ? "NUL" : "/dev/null");
     }
@@ -439,6 +336,17 @@ public class PackageDownloadService {
         } catch (IOException e) {
             throw new IllegalStateException("skopeo 인증 파일을 만들 수 없습니다.", e);
         }
+    }
+
+    /**
+     * docker.io 기준 정규 저장소명. 네임스페이스가 없는 이름(NCR의 {@code cids}·{@code ocr}·
+     * {@code piids}·{@code pips} 4개)은 Docker Hub 정규형이 {@code library/<이름>}이라, 그대로
+     * 두면 기록된 이름과 조회 시 정규화된 이름이 또 어긋나 호스트를 안 붙였을 때와 똑같은
+     * 증상이 난다(적재는 되는데 이름으로 못 쓰고 `docker images`에 두 행). 표시 이름에는
+     * 영향이 없다 — Docker가 docker.io/library/를 표시에서 뗀다(실측).
+     */
+    private static String canonicalRepository(ImageReference ref) {
+        return ref.repository().contains("/") ? ref.repository() : "library/" + ref.repository();
     }
 
     private static boolean isRetryable(String stderr) {
@@ -468,19 +376,6 @@ public class PackageDownloadService {
     }
 
     private record SkopeoResult(int exitCode, String stderr, boolean timedOut) {}
-
-    private record ProcessResult(int exitCode, byte[] output) {
-        String text() {
-            return new String(output, StandardCharsets.UTF_8);
-        }
-    }
-
-    /** 아카이브 후처리 실패 — 항목 실패로 흡수된다. 인터럽트와 구분하려 별도 타입이다. */
-    private static class ArchiveException extends RuntimeException {
-        ArchiveException(String message) {
-            super(message);
-        }
-    }
 
     /** authfile 경로와 그 안의 base64 자격 증명 — stderr 마스킹 대상으로도 쓴다. */
     private record AuthFile(Path path, String base64Value) {}

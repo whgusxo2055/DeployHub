@@ -2,10 +2,8 @@ package com.deployhub.config;
 
 import com.deployhub.registry.NcrProperties;
 import com.deployhub.registry.NcrRegistryClient;
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.concurrent.TimeUnit;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -14,7 +12,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
- * 기동 시 외부 연동 사전 점검(fail-fast) — NCR 도달성과 skopeo·tar 실행 가능 여부.
+ * 기동 시 외부 연동 사전 점검(fail-fast) — NCR 도달성과 skopeo 실행 가능 여부.
  * 첫 Job까지 미루면 사용자가 패키징을 시작한 뒤에야 오설정을 알게 된다.
  * {@code deployhub.startup-checks.enabled=false}로 끌 수 있다(NCR에 붙을 수 없는 환경용, 기본은 true).
  * 자격 증명 존재 검증은 {@code @NotBlank}가, 청크 크기 검증은 {@code UploadChunkSizeValidator}가 맡는다.
@@ -51,27 +49,5 @@ public class StartupChecks implements ApplicationRunner {
             }
         }
         log.info("skopeo 확인 완료.");
-
-        // tar는 다운로드 후처리의 하드 의존이다 — 없으면 수 GB를 다 받은 뒤에야 항목이 실패한다.
-        log.info("tar 실행 가능 여부를 확인합니다.");
-        try {
-            Process process = new ProcessBuilder("tar", "--version")
-                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                    .redirectErrorStream(true)
-                    .start();
-            if (!process.waitFor(10, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                throw new IllegalStateException("E-0605: tar 실행이 응답하지 않습니다.");
-            }
-            if (process.exitValue() != 0) {
-                throw new IllegalStateException("E-0605: tar를 실행할 수 없습니다(exit=%d).".formatted(process.exitValue()));
-            }
-        } catch (IOException e) {
-            throw new IllegalStateException("E-0605: tar를 실행할 수 없습니다.", e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("tar 확인 중 인터럽트되었습니다.", e);
-        }
-        log.info("tar 확인 완료.");
     }
 }

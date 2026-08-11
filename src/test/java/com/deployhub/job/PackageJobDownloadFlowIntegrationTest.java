@@ -19,6 +19,10 @@ import com.deployhub.version.entity.SubmitStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -74,9 +78,15 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
     private static final Duration DONE_TIMEOUT = Duration.ofSeconds(USE_REAL_NCR ? 900 : 60);
     private static final int PROCESS_TIMEOUT_SECONDS = USE_REAL_NCR ? 900 : 60;
     private static final String TEST_REPOSITORY = "deployhub-test/alpine";
+    // 네임스페이스 없는 이름이다 — NCR의 인덱스 3개(cids·ocr·pips)가 모두 이 형태이고,
+    // docker.io 정규형이 library/<이름>이라 이 테스트가 그 경로까지 함께 검증한다.
+    private static final String MULTI_ARCH_REPOSITORY = "alpinemulti";
     private static final String TEST_TAG = "3.19";
 
     private static String testImageTag;
+    private static String multiArchImageTag;
+    /** 로컬 registry:2 호스트:포트 — digest 대조 시 레지스트리를 다시 조회하는 데 쓴다. */
+    private static String registryHost;
 
     @Container
     static final GenericContainer<?> REGISTRY =
@@ -108,13 +118,30 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
             return;
         }
         testImageTag = TEST_REPOSITORY + ":" + TEST_TAG;
-        String registryHost = REGISTRY.getHost() + ":" + REGISTRY.getMappedPort(5000);
+        registryHost = REGISTRY.getHost() + ":" + REGISTRY.getMappedPort(5000);
+        // --format v2s2로 밀어 넣는 게 중요하다. alpine 원본은 OCI 형식이라 그대로 시딩하면
+        // oci-archive: 목적지에서 변환이 일어나지 않아, --preserve-digests가 빠져도 digest가
+        // 우연히 일치한다(= 아래 digest 단언이 아무것도 못 잡는 가짜 안전망이 된다).
+        // dev-ncr-sb 실물도 12개 중 9개가 docker schema2라 이쪽이 실제 구성에 가깝다.
         runProcess(
                 "skopeo",
                 "copy",
+                "--format",
+                "v2s2",
                 "--dest-tls-verify=false",
                 "docker://alpine:" + TEST_TAG,
                 "docker://" + registryHost + "/" + testImageTag);
+
+        // 인덱스 경로 검증용 — 원본 alpine은 멀티아치 OCI 인덱스다. --all로 인덱스째 밀어 넣어야
+        // skopeo의 --multi-arch all이 실제로 하는 일(평탄화 안 함)을 테스트가 잡을 수 있다.
+        multiArchImageTag = MULTI_ARCH_REPOSITORY + ":" + TEST_TAG;
+        runProcess(
+                "skopeo",
+                "copy",
+                "--all",
+                "--dest-tls-verify=false",
+                "docker://alpine:" + TEST_TAG,
+                "docker://" + registryHost + "/" + multiArchImageTag);
     }
 
     private static boolean isCommandAvailable(String command) {
@@ -206,29 +233,131 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(tarFiles).hasSize(1);
         Path tarPath = tarFiles.get(0);
 
-        // 산출물이 OCI 레이아웃 + 레거시 manifest.json 하이브리드여야 한다. oci-layout이
-        // 사라지면 docker-archive:로 되돌아간 것이고(레이어가 풀려 2~3배로 불어난다),
-        // manifest.json이 없으면 Docker 28 이하가 적재조차 못 한다.
+        // 산출물은 순수 OCI 레이아웃이다. oci-layout이 사라지면 docker-archive:로 되돌아간
+        // 것이고(레이어가 풀려 2~3배로 불어난다), layer.tar가 보이면 압축이 풀린 것이다.
+        // 레거시 manifest.json은 더는 넣지 않는다 — containerd 이미지 저장소가 index.json을
+        // 직접 읽는다(구버전 Docker 미지원 결정에 따라 하이브리드 조립을 제거했다).
         String entries = runProcess("tar", "-tf", tarPath.toString());
-        assertThat(entries).contains("oci-layout").contains("manifest.json");
+        assertThat(entries).contains("oci-layout").contains("index.json");
         assertThat(entries).doesNotContain("layer.tar");
 
-        // 아래 docker load는 호스트의 최신 데몬에서 도는데, Docker 29는 index.json만 보고
-        // manifest.json을 통째로 무시한다 — Config/Layers가 존재하지 않는 blob을 가리켜도
-        // 통과한다(실측). 즉 이 검증이 없으면 조립 로직 전체가 무테스트로 남고, 깨져도
-        // Docker 28 이하를 쓰는 고객사에서만 드러난다.
-        JsonNode legacyManifest = new ObjectMapper()
-                .readTree(runProcess("tar", "-xf", tarPath.toString(), "-O", "manifest.json"))
-                .get(0);
-        assertThat(legacyManifest.get("RepoTags").get(0).asText()).isEqualTo(testImageTag);
-        assertThat(entries).contains(legacyManifest.get("Config").asText());
-        assertThat(legacyManifest.get("Layers")).isNotEmpty();
-        for (JsonNode layer : legacyManifest.get("Layers")) {
-            assertThat(entries).contains(layer.asText());
+        // 아카이브 digest가 레지스트리 digest와 같아야 한다 — skopeo에서 --preserve-digests가
+        // 빠지면 매니페스트를 OCI로 변환해 담아 digest가 반드시 달라지므로, 이 단언이 그 회귀를
+        // 잡는다. (실 NCR 모드는 skopeo inspect에 자격증명이 따로 필요해 로컬 모드에서만 확인한다.)
+        if (!USE_REAL_NCR) {
+            String registryDigest = registryDigestOf(testImageTag);
+            String archiveDigest = new ObjectMapper()
+                    .readTree(runProcess("tar", "-xf", tarPath.toString(), "-O", "index.json"))
+                    .get("manifests")
+                    .get(0)
+                    .get("digest")
+                    .asText();
+            assertThat(archiveDigest).isEqualTo(registryDigest);
         }
 
+        // index.json의 ref.name은 완전 수식 참조(docker.io/…)여야 한다. 호스트가 빠지면
+        // containerd 저장소가 정규화 불가능한 이름으로 기록해, 적재는 되는데 그 이름으로
+        // run/inspect/tag/rmi가 전부 실패하고 `docker images`에 같은 행이 두 번 뜬다.
+        // NCR 엔드포인트를 쓰지 않는 이유는 아카이브가 고객사로 나가기 때문이다(주소 노출).
+        String refName = new ObjectMapper()
+                .readTree(runProcess("tar", "-xf", tarPath.toString(), "-O", "--occurrence=1", "index.json"))
+                .get("manifests")
+                .get(0)
+                .get("annotations")
+                .get("org.opencontainers.image.ref.name")
+                .asText();
+        assertThat(refName).isEqualTo("docker.io/" + testImageTag);
+
+        // 순수 OCI 레이아웃이라 이 docker load는 **containerd 이미지 저장소**를 요구한다 —
+        // classic(graph driver) 데몬에서는 "does not contain a manifest.json"으로 깨진다.
+        // 서버/CI는 Docker 29(기본 containerd)라 통과하지만, classic로 설정한 로컬에서
+        // 이 테스트만 깨지면 그건 코드가 아니라 데몬 설정 문제다.
         String loadOutput = runProcess("docker", "load", "-i", tarPath.toString());
         assertThat(loadOutput).contains(testImageTag);
+
+        // 적재된 이미지를 **이름으로** 실제로 쓸 수 있어야 한다 — "Loaded image:" 출력만으로는
+        // 이름이 쓸 수 있는지 알 수 없다(호스트 없는 이름도 적재 자체는 성공한다).
+        // 고객사가 치는 이름은 docker.io/ 없는 형태이므로 그대로 조회되어야 한다.
+        assertThat(runProcess("docker", "image", "inspect", testImageTag)).contains(testImageTag);
+        // 같은 이미지가 두 행으로 뜨면 이름 기록이 잘못된 것이다.
+        assertThat(runProcess("docker", "images", "--format", "{{.Repository}}:{{.Tag}}")
+                        .lines()
+                        .filter(testImageTag::equals)
+                        .count())
+                .isEqualTo(1);
+        runProcess("docker", "rmi", testImageTag);
+    }
+
+    @Test
+    void 인덱스_이미지는_평탄화되지_않고_인덱스_digest_그대로_담긴다() throws Exception {
+        Assumptions.assumeFalse(USE_REAL_NCR, "로컬 registry:2에 시딩한 멀티아치 인덱스 전용 검증입니다.");
+        String versionName = "2026.20.05";
+        registerMainVersion(versionName);
+        registerAndSubmitSubVersion(versionName, "test", "1.0.0", List.of(multiArchImageTag));
+
+        ResponseEntity<PackageJobDetailResponse> created = createPackageJob(versionName, List.of(multiArchImageTag));
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        await().atMost(DONE_TIMEOUT).untilAsserted(() -> assertThat(getJob(versionName)
+                        .getBody()
+                        .job()
+                        .status())
+                .isEqualTo("DONE"));
+
+        Path tarPath;
+        try (var stream = Files.list(Path.of(workDir, versionName, "images"))) {
+            tarPath = stream.filter(p -> p.toString().endsWith(".tar")).findFirst().orElseThrow();
+        }
+
+        // skopeo에서 --multi-arch all이 빠지면 인덱스가 플랫폼 하나로 평탄화돼 담기고,
+        // index.json에는 그 플랫폼 매니페스트 digest가 들어간다 — 레지스트리가 태그에 대해
+        // 보고하는 인덱스 digest와 절대 같아질 수 없다. 이 단언이 그 회귀를 잡는다.
+        JsonNode entry = new ObjectMapper()
+                .readTree(runProcess("tar", "-xf", tarPath.toString(), "-O", "--occurrence=1", "index.json"))
+                .get("manifests")
+                .get(0);
+        assertThat(entry.get("digest").asText()).isEqualTo(registryDigestOf(multiArchImageTag));
+        assertThat(entry.get("mediaType").asText()).contains("index");
+
+        // 네임스페이스 없는 이름은 docker.io 정규형이 library/<이름>이다 — 안 붙이면 기록된
+        // 이름과 조회 시 정규화된 이름이 어긋나, 적재는 되는데 이름으로 못 쓰고 행이 둘로 뜬다.
+        assertThat(entry.get("annotations").get("org.opencontainers.image.ref.name").asText())
+                .isEqualTo("docker.io/library/" + multiArchImageTag);
+
+        runProcess("docker", "load", "-i", tarPath.toString());
+        assertThat(runProcess("docker", "image", "inspect", multiArchImageTag)).contains(multiArchImageTag);
+        assertThat(runProcess("docker", "images", "--format", "{{.Repository}}:{{.Tag}}")
+                        .lines()
+                        .filter(multiArchImageTag::equals)
+                        .count())
+                .isEqualTo(1);
+        runProcess("docker", "rmi", multiArchImageTag);
+    }
+
+    /**
+     * 레지스트리가 태그에 대해 보고하는 매니페스트 digest({@code Docker-Content-Digest} 헤더).
+     * {@code skopeo inspect}를 쓰지 않는 이유는 두 가지다 — {@code --format {{.Digest}}}는 인덱스에서
+     * 플랫폼 하나를 골라 그 digest를 주고, {@code --raw}는 이 클래스의 {@code runProcess}가 stderr를
+     * 합쳐 읽어 본문이 오염될 수 있다.
+     */
+    private static String registryDigestOf(String imageTag) throws IOException, InterruptedException {
+        int separator = imageTag.lastIndexOf(':');
+        String url = "http://%s/v2/%s/manifests/%s"
+                .formatted(registryHost, imageTag.substring(0, separator), imageTag.substring(separator + 1));
+        HttpResponse<Void> response = HttpClient.newHttpClient()
+                .send(
+                        HttpRequest.newBuilder(URI.create(url))
+                                .header(
+                                        "Accept",
+                                        String.join(
+                                                ",",
+                                                "application/vnd.docker.distribution.manifest.v2+json",
+                                                "application/vnd.oci.image.manifest.v1+json",
+                                                "application/vnd.docker.distribution.manifest.list.v2+json",
+                                                "application/vnd.oci.image.index.v1+json"))
+                                .GET()
+                                .build(),
+                        HttpResponse.BodyHandlers.discarding());
+        return response.headers().firstValue("Docker-Content-Digest").orElseThrow();
     }
 
     @Test

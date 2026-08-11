@@ -234,7 +234,7 @@ class NcrRegistryClientTest {
     }
 
     @Test
-    void 인덱스_응답이면_플랫폼_매니페스트를_따라가_레이어_크기를_합산한다() {
+    void 인덱스_응답이면_어테스테이션까지_포함해_전_항목의_레이어_크기를_합산한다() {
         String index =
                 """
                 {"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[
@@ -245,7 +245,12 @@ class NcrRegistryClientTest {
         server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/tag"))
                 .andRespond(withSuccess(index, MediaType.APPLICATION_JSON)
                         .header("Docker-Content-Digest", "sha256:index"));
-        // 어테스테이션(unknown/unknown)이 아니라 linux/amd64 항목을 따라가야 한다.
+        // skopeo를 --multi-arch all로 돌려 인덱스를 통째로 담으므로, 어테스테이션(unknown/unknown)도
+        // 아카이브에 들어간다 — 빼고 더하면 디스크 가드가 실제보다 작게 잡는다.
+        server.expect(requestTo(
+                        "https://ncr.example.com/v2/repo/manifests/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, BASIC))
+                .andRespond(withSuccess("{\"layers\":[{\"size\":8}]}", MediaType.APPLICATION_JSON));
         server.expect(requestTo(
                         "https://ncr.example.com/v2/repo/manifests/sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, BASIC))
@@ -258,7 +263,7 @@ class NcrRegistryClientTest {
 
         // digest는 태그가 가리키는 인덱스 digest 그대로여야 한다 (skopeo 비교 대상과 동일).
         assertThat(info.digest()).isEqualTo("sha256:index");
-        assertThat(info.totalSize()).isEqualTo(42L);
+        assertThat(info.totalSize()).isEqualTo(50L);
         server.verify();
     }
 

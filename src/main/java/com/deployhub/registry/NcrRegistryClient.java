@@ -144,7 +144,9 @@ public class NcrRegistryClient {
     }
 
     /**
-     * 레이어 크기 합계. 인덱스에는 {@code layers}가 없어 플랫폼 매니페스트를 한 번 더 조회해 더한다.
+     * 레이어 크기 합계. 인덱스에는 {@code layers}가 없어 자식 매니페스트를 각각 조회해 더한다 —
+     * skopeo를 {@code --multi-arch all}로 돌려 플랫폼을 고르지 않고 전 항목을 아카이브에 담으므로,
+     * buildx 어테스테이션(platform이 unknown/unknown)도 빼지 않고 합산해야 실제 크기와 맞는다.
      * 못 구하면 0이 아니라 {@link ManifestInfo#UNKNOWN_SIZE}다 — 0이면 디스크 가드가 fail-open 된다.
      */
     private long totalSize(String manifestJson, String path, String authorizationHeader) {
@@ -156,17 +158,31 @@ public class NcrRegistryClient {
         if (!manifests.isArray() || manifests.isEmpty()) {
             return sumLayerSizes(root);
         }
-        String childDigest = selectPlatformDigest(manifests);
-        if (childDigest == null) {
-            log.warn("NCR 인덱스에서 쓸 플랫폼 매니페스트를 찾지 못해 크기를 미상으로 처리합니다: {}", path);
-            return ManifestInfo.UNKNOWN_SIZE;
+        long total = 0L;
+        for (JsonNode entry : manifests) {
+            String childDigest = entry.path("digest").asText(null);
+            // digest는 응답 본문 값이라 경로에 붙기 전 반드시 문법 검사 — 경로 탈출·쿼리 인젝션·
+            // URI 템플릿 변수가 여기서 걸러진다.
+            if (childDigest == null || !DIGEST.matcher(childDigest).matches()) {
+                log.warn("NCR 인덱스 항목의 digest 형식이 올바르지 않아 크기를 미상으로 처리합니다: {}", path);
+                return ManifestInfo.UNKNOWN_SIZE;
+            }
+            JsonNode child = fetchChildManifest(path, childDigest, authorizationHeader);
+            if (child == null) {
+                return ManifestInfo.UNKNOWN_SIZE;
+            }
+            long childTotal = sumLayerSizes(child);
+            total = total + childTotal < total ? Long.MAX_VALUE : total + childTotal;
         }
-        // ponytail: 인덱스 → 매니페스트 1단계만 따라간다. 중첩 인덱스는 실물이 드물어 미지원.
+        return total;
+    }
+
+    /** ponytail: 인덱스 → 매니페스트 1단계만 따라간다. 중첩 인덱스는 실물이 드물어 미지원. */
+    private JsonNode fetchChildManifest(String path, String childDigest, String authorizationHeader) {
         String childPath = path.substring(0, path.lastIndexOf('/') + 1) + childDigest;
-        RelativePathGuard.requireRelative(childPath); // 방어층 — 형식 검증은 selectPlatformDigest가 이미 했다
-        JsonNode child;
+        RelativePathGuard.requireRelative(childPath); // 방어층 — 형식 검증은 호출부가 이미 했다
         try {
-            child = readTree(restClient
+            return readTree(restClient
                     .get()
                     .uri(childPath)
                     .header(HttpHeaders.AUTHORIZATION, authorizationHeader)
@@ -183,32 +199,6 @@ public class NcrRegistryClient {
         } catch (ResourceAccessException ex) {
             throw timeoutRetryable(childPath, ex);
         }
-        return child == null ? ManifestInfo.UNKNOWN_SIZE : sumLayerSizes(child);
-    }
-
-    /**
-     * linux/amd64 우선, 없으면 첫 실제 플랫폼. unknown/unknown은 buildx 어테스테이션이라 걸러야 한다
-     * (고르면 이미지가 아니라 서명 blob 크기를 더한다). digest는 응답 본문 값이라 경로에 붙기 전
-     * 반드시 문법 검사 — 경로 탈출·쿼리 인젝션·URI 템플릿 변수가 여기서 걸러진다.
-     */
-    private static String selectPlatformDigest(JsonNode manifests) {
-        String fallback = null;
-        for (JsonNode entry : manifests) {
-            JsonNode platform = entry.path("platform");
-            String os = platform.path("os").asText("");
-            String arch = platform.path("architecture").asText("");
-            String digest = entry.path("digest").asText(null);
-            if (digest == null || !DIGEST.matcher(digest).matches() || "unknown".equals(os) || "unknown".equals(arch)) {
-                continue;
-            }
-            if ("linux".equals(os) && "amd64".equals(arch)) {
-                return digest;
-            }
-            if (fallback == null) {
-                fallback = digest;
-            }
-        }
-        return fallback;
     }
 
     // size는 응답 본문 값이라 음수·거대값이 올 수 있다 — 합계가 뒤집히면 디스크 판정이

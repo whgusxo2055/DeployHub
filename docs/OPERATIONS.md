@@ -134,5 +134,32 @@ curl -sS -o /dev/null -D - https://<host>/v2/
   리스크이므로, NCP ACG에서 소스 IP를 반드시 제한한다.
 - **정리는 단일 인스턴스를 전제로 한다.** 여러 인스턴스를 띄우면 스케줄러가 같은 대상을
   중복으로 집을 수 있다(Graph 404로 흡수되어 치명적이진 않다).
-- **zstd 압축 레이어는 반입할 수 없다.** Docker 28 이하에서 `invalid tar header`로 실패하므로
-  조립 단계에서 차단한다. NCR의 이미지는 전부 gzip이라 현재는 해당 없음.
+- **고객사 Docker는 24 이상 + containerd 이미지 저장소여야 한다.** 산출물이 순수 OCI 레이아웃
+  (`oci-archive:`)이라, 구식 classic(graph driver) 저장소는 `docker load`에서 다음과 같이 실패한다:
+
+  ```
+  invalid archive: does not contain a manifest.json
+  ```
+
+  조건은 **버전이 아니라 저장소 방식**이다(dind 실측). Docker 29는 기본으로 켜져 있지만 **끄면
+  실패**하고, 24~28은 명시적으로 켜야 하며, 23 이하는 켜도 안 된다.
+
+  확인:
+  ```bash
+  docker info -f '{{.DriverStatus}}' | grep -q io.containerd.snapshotter \
+    && echo "OK" || echo "설정 필요"
+  ```
+
+  켜기(24~28) — `/etc/docker/daemon.json`에 아래를 넣고 `systemctl restart docker`:
+  ```json
+  { "features": { "containerd-snapshotter": true } }
+  ```
+
+  > 전환하면 기존 이미지가 `docker images`에서 **안 보인다.** 지워진 게 아니라 두 저장소가
+  > `/var/lib/docker` 안에 공존하고 데몬이 한쪽만 보기 때문이며, 설정을 되돌리면 그대로
+  > 복구된다. 다만 새 저장소는 비어 있으므로 필요한 이미지는 다시 받아야 한다.
+
+- **zstd 압축 레이어는 검증된 바 없다.** NCR의 이미지는 전부 gzip이라 현재 해당 없음. 하이브리드
+  조립을 제거하면서 조립 단계의 zstd 차단 가드도 함께 사라졌으므로, zstd 레이어가 섞인 이미지가
+  NCR에 올라오면 차단 없이 반입된다. Docker 29(containerd)에서는 적재되는 것을 확인했으나
+  24~28 구간은 미측정이다.

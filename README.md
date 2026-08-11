@@ -13,7 +13,6 @@
 | JDK | 17 | Gradle toolchain이 강제 |
 | MySQL | 8.0 | Flyway가 스키마를 관리 |
 | skopeo | Linux 전용 | **런타임 하드 의존.** 없으면 기동이 E-0605로 실패한다 |
-| tar | CLI | 아카이브 후처리에 필요. 대부분의 배포판에 기본 포함 |
 
 > skopeo는 Windows 공식 빌드가 없다. 개발 중이라도 실제 다운로드 경로를 돌리려면
 > WSL이나 리눅스에서 실행할 것. 운영은 NCP VPC 내부 리눅스가 전제다.
