@@ -214,6 +214,38 @@ class GraphUploadServiceTest {
     }
 
     @Test
+    void 세션_조회가_실패해도_Graph_응답_본문을_error_message에_남기지_않는다() {
+        // error_message는 무인증 GET /api/package-jobs/{versionName} 응답에 그대로 실린다.
+        // RestClientResponseException.getMessage()에는 업스트림 응답 본문이 통째로 들어 있어
+        // 그대로 저장하면 Graph가 돌려준 내용이 외부로 새어 나간다.
+        String upstreamBody = "{\"error\":\"tempauth=LEAKED_SESSION_TOKEN\"}";
+        PackageItem item = downloadedItem();
+        when(packageItemRepository.findByVersionNameOrderByImageTagAsc(VERSION_NAME)).thenReturn(List.of(item));
+        GraphUploadService service = newService(10);
+
+        // 416 → 세션 상태 재조회가 400 → 재시도 대상이라 maxRetries(2)만큼 더 돈다 = 총 3회
+        for (int attempt = 0; attempt < 3; attempt++) {
+            server.expect(requestTo("https://graph.microsoft.com/v1.0/drives/drive-1/items/%s:/%s:/createUploadSession"
+                            .formatted(FOLDER_ITEM_ID, fileName)))
+                    .andRespond(withSuccess(
+                            "{\"uploadUrl\":\"https://upload.example/session-leak\"}", MediaType.APPLICATION_JSON));
+            server.expect(requestTo("https://upload.example/session-leak"))
+                    .andExpect(method(HttpMethod.PUT))
+                    .andRespond(withStatus(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE));
+            server.expect(requestTo("https://upload.example/session-leak"))
+                    .andExpect(method(HttpMethod.GET))
+                    .andRespond(withStatus(HttpStatus.BAD_REQUEST).body(upstreamBody));
+        }
+
+        assertThatThrownBy(() -> service.uploadAll(VERSION_NAME, FOLDER_ITEM_ID))
+                .isInstanceOf(IllegalStateException.class);
+
+        assertThat(item.getStatus()).isEqualTo(PackageItemStatus.FAILED);
+        assertThat(item.getErrorMessage()).doesNotContain("LEAKED_SESSION_TOKEN").contains("status=400");
+        server.verify();
+    }
+
+    @Test
     void 업로드_대상_파일이_없으면_HTTP_호출_없이_항목을_FAILED_처리한다() {
         PackageItem item = PackageItem.builder()
                 .versionName(VERSION_NAME)

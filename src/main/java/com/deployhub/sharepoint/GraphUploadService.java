@@ -109,7 +109,7 @@ public class GraphUploadService {
                 boolean retryable = isRetryable(e);
                 attempt++;
                 if (!retryable || attempt > retryProperties.maxRetries()) {
-                    return failItem(item, describeFailure(e), null);
+                    return failItem(item, describeFailure(e), e.toString());
                 }
                 item.incrementRetryCount();
                 packageItemRepository.save(item);
@@ -127,7 +127,20 @@ public class GraphUploadService {
         return true;
     }
 
+    /**
+     * DB에 남길 사유. 업스트림 예외 메시지를 그대로 쓰지 않는다 — {@code RestClientResponseException}의
+     * 메시지에는 Graph 응답 본문이 통째로 들어 있고, 그게 무인증
+     * {@code GET /api/package-jobs/{versionName}} 응답으로 그대로 나간다.
+     * 우리가 던진 {@code IllegalStateException}만 문구를 통제하므로 그대로 쓴다
+     * ({@code GraphFolderService.describeBriefly}와 같은 정책). 원문은 호출자가 로그로 남긴다.
+     */
     private String describeFailure(RuntimeException e) {
+        if (e instanceof RestClientResponseException rex) {
+            return "E-1101: Graph 호출이 실패했습니다(status=%d).".formatted(rex.getStatusCode().value());
+        }
+        if (e instanceof ApiException apiEx) {
+            return "%s: %s".formatted(apiEx.getErrorCode().getCode(), apiEx.getErrorCode().getDefaultMessage());
+        }
         String message = e.getMessage();
         return message != null && !message.isBlank() ? message : e.getClass().getSimpleName();
     }
