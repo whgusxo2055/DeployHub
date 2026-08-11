@@ -14,6 +14,6 @@ public interface SubVersionRepository extends JpaRepository<SubVersion, Long> {
 
     long countByMainVersionName(String mainVersionName);
 
-    /** FN-02-1 패키징 가능 여부 판정 — PENDING 담당 영역 존재 확인. */
+    /** 패키징 가능 여부 판정 — PENDING 담당 영역 존재 확인. */
     List<SubVersion> findByMainVersionNameAndSubmitStatus(String mainVersionName, SubmitStatus submitStatus);
 }

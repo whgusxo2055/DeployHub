@@ -19,8 +19,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * FN-02 "직전 버전 대비 변경 여부"와 Phase 3 패키징 대상 선정이 공유하는 서비스
- * (구현계획서 Phase 1-4). 표시용이 아니라 핵심 로직이므로 이 클래스에서만 계산한다.
+ * "직전 버전 대비 변경 여부"를 조회 응답과 패키징 대상 선정이 함께 쓴다.
+ * 표시용이 아니라 핵심 로직이므로 이 클래스에서만 계산한다.
  */
 @Service
 @RequiredArgsConstructor
@@ -85,7 +85,7 @@ public class VersionComparisonService {
         return result;
     }
 
-    /** Phase 3이 재사용 — 직전 메인버전 대비 변경된 image_tag 목록 (패키징 대상 기본 선택값). */
+    /** 직전 메인버전 대비 변경된 image_tag 목록 — 패키징 대상의 기본 선택값이다. */
     public List<String> changedImageTags(String versionName) {
         return computeChanges(versionName).values().stream()
                 .flatMap(change -> change.componentChangedByImageTag().entrySet().stream())

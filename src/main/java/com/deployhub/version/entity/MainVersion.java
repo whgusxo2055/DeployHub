@@ -11,7 +11,7 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-/** ERD main_version — 메인버전 (배포 단위). PK는 대리키가 아니라 {@code version_name} 자체다. */
+/** 메인버전(배포 단위). PK는 대리키가 아니라 {@code version_name} 자체다. */
 @Entity
 @Table(name = "main_version")
 @Getter

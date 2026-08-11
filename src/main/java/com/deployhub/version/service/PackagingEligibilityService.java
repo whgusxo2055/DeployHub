@@ -8,10 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * FN-02-1 패키징 가능 여부 판정 (구현계획서 Phase 1-5). Phase 3의 매니페스트 확정이
- * 이 서비스를 재사용하므로 별도 클래스로 분리한다.
- */
+/** 패키징 가능 여부 판정. 조회 API와 매니페스트 확정이 함께 쓰므로 별도 클래스로 분리했다. */
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)

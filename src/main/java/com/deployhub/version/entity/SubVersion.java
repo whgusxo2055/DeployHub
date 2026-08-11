@@ -15,10 +15,7 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-/**
- * ERD sub_version — 서브버전 (모듈 릴리즈 · 제출 단위). 담당 영역과 1:1로 대응한다.
- * UNIQUE(main_version_name, code).
- */
+/** 서브버전(모듈 릴리즈·제출 단위). 담당 영역과 1:1이며 UNIQUE(main_version_name, code)다. */
 @Entity
 @Table(name = "sub_version")
 @Getter
@@ -61,7 +58,7 @@ public class SubVersion {
         this.version = version;
         this.note = note;
         this.sortOrder = sortOrder;
-        // 계획서 Phase 1-2: 등록·수정 시 submit_status는 PENDING으로 초기화한다.
+        // 등록·수정하면 제출 상태는 PENDING으로 되돌아간다.
         this.submitStatus = SubmitStatus.PENDING;
         this.submittedBy = null;
         this.submittedAt = null;

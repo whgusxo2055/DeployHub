@@ -2,6 +2,7 @@ package com.deployhub.sharepoint;
 
 import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
+import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
 import com.deployhub.job.entity.PackageItem;
 import com.deployhub.job.entity.PackageItemStatus;
@@ -14,7 +15,6 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
@@ -23,23 +23,17 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientResponseException;
 
 /**
- * FN-09 파일 업로드 (구현계획서 Phase 5 작업 항목 2, 541-561행). 파일별로 순차 업로드하고,
- * 이미지 {@code .tar}는 통상 GB 단위라 업로드 세션 경로만 쓴다(250MB 이하 단순 PUT은
- * 다루지 않는다 — P1 범위 산출물이 전량 Docker Image라 파일이 그보다 작을 일이 없다).
- *
- * <p>세션이 소멸하면(E-1102) 이어받기가 불가능하다 — 바깥쪽 재시도 루프가 매번
- * {@link #uploadFile}을 처음부터 다시 호출해 새 세션을 만든다(구현계획서 "세션 재생성
- * 후 해당 파일 처음부터"). 중단 후 재개(416, E-1103)만 세션을 유지한 채 이어간다.
+ * 파일별 순차 업로드. 산출물이 전량 GB 단위 이미지 tar라 업로드 세션 경로만 쓴다(단순 PUT은 다루지 않는다).
+ * 세션이 소멸하면 이어받기가 불가능해 바깥 재시도 루프가 {@link #uploadFile}을 처음부터 다시 호출한다 —
+ * 범위 불일치(416)만 세션을 유지한 채 이어간다.
  */
 @Slf4j
 @Service
 public class GraphUploadService {
 
-    // E-1103(416) 무한루프 방지 — 실 테넌트 없이는 이 경로의 실제 동작을 검증할 수 없어
-    // 보수적으로 작게 잡는다. 구현계획서 완료 기준(573행, 업로드 중단 후 재개)은 Graph
-    // 앱 연동 준비 후 재검증이 필요하다. 청크 하나가 성공할 때마다 0으로 되돌린다 —
-    // 아니면 500청크짜리 파일에서 서로 다른 지점의 일시적 416이 누적돼 파일 전체가
-    // 실패한다(코드리뷰로 발견).
+    // 416 무한루프 방지. 청크가 성공할 때마다 0으로 되돌릴 것 — 아니면 큰 파일에서 서로 다른
+    // 지점의 일시적 416이 누적돼 파일 전체가 실패한다.
+    // ponytail: 실 테넌트 없이 검증할 수 없어 보수적으로 작게 잡았다 — Graph 연동 후 재검증할 것.
     private static final int MAX_RANGE_MISMATCH_RETRIES = 3;
 
     private final PackageItemRepository packageItemRepository;
@@ -65,11 +59,9 @@ public class GraphUploadService {
     }
 
     /**
-     * {@code folderItemId}는 {@link GraphFolderService#ensureFolder}가 확보한 폴더의 Drive
-     * Item ID다. {@code ensureFolder}는 재사용 시 폴더를 비우므로(533행), 이미 {@code UPLOADED}인
-     * 항목도 다시 올려야 폴더 내용이 {@code package_item} 목록과 일치한다(코드리뷰로 발견된
-     * 데이터 유실 버그 — 그전엔 UPLOADED 항목을 건너뛰어 폴더에서 사라진 채로 남았다). 로컬
-     * {@code .tar}는 Job이 DONE에 도달하지 않는 한 정리 배치(Phase 6)가 지우지 않으므로 항상 남아 있다.
+     * 이미 {@code UPLOADED}인 항목도 <b>다시</b> 올린다 — {@link GraphFolderService#ensureFolder}가
+     * 재사용 시 폴더를 비우므로, 건너뛰면 그 파일이 폴더에서 사라진 채로 남는다.
+     * 로컬 tar는 Job이 DONE에 닿기 전까지 정리 배치가 지우지 않아 항상 남아 있다.
      */
     public void uploadAll(String versionName, String folderItemId) {
         String driveId = graphApiClient.resolveDriveId();
@@ -120,16 +112,12 @@ public class GraphUploadService {
                 }
                 item.incrementRetryCount();
                 packageItemRepository.save(item);
-                sleep(retryProperties.backoffFor(attempt));
+                RetryExecutor.sleepUninterruptibly(retryProperties.backoffFor(attempt));
             }
         }
     }
 
-    /**
-     * 토큰 발급 실패·권한 부족은 재시도해도 결과가 바뀌지 않는다 — 재시도 예산을 태우지
-     * 않고 바로 항목을 실패시킨다. {@code PackageDownloadService.isRetryable}(stderr 정규식
-     * 기반)과 판정 대상은 다르지만 의도는 같다: "재시도해도 결과가 안 바뀌는 오류"만 걸러낸다.
-     */
+    /** 토큰 발급 실패·권한 부족은 재시도해도 결과가 안 바뀐다 — 예산을 태우지 않고 바로 실패시킨다. */
     private boolean isRetryable(RuntimeException e) {
         if (e instanceof ApiException apiEx) {
             return apiEx.getErrorCode() != ErrorCode.GRAPH_TOKEN_ISSUE_FAILED
@@ -143,7 +131,7 @@ public class GraphUploadService {
         return message != null && !message.isBlank() ? message : e.getClass().getSimpleName();
     }
 
-    /** 호출될 때마다 새 업로드 세션을 만든다 — 재시도가 항상 이 메서드를 다시 부르는 것만으로 "세션 재생성"이 된다. */
+    /** 호출될 때마다 새 세션을 만든다 — 재시도가 이 메서드를 다시 부르는 것만으로 세션 재생성이 된다. */
     private String uploadFile(String driveId, String folderItemId, String fileName, Path tarPath, long fileSize) {
         String uploadUrl = createUploadSession(driveId, folderItemId, fileName);
         long offset = 0;
@@ -190,7 +178,7 @@ public class GraphUploadService {
         return extractUploadUrl(response);
     }
 
-    /** E-1101(5xx)/E-1106(429) — 같은 청크를 그대로 재전송한다. 429는 서버가 명시한 Retry-After를 우선한다. */
+    /** 5xx·429는 같은 청크를 그대로 재전송한다. 429는 서버가 명시한 Retry-After를 우선한다. */
     private GraphApiClient.ChunkUploadResult putChunkWithRetry(String uploadUrl, byte[] chunk, long start, long end, long total) {
         int attempt = 0;
         while (true) {
@@ -201,7 +189,8 @@ public class GraphUploadService {
                 return result;
             }
             attempt++;
-            sleep(result.retryAfter() != null ? result.retryAfter() : retryProperties.backoffFor(attempt));
+            RetryExecutor.sleepUninterruptibly(
+                    result.retryAfter() != null ? result.retryAfter() : retryProperties.backoffFor(attempt));
         }
     }
 
@@ -266,12 +255,4 @@ public class GraphUploadService {
         return false;
     }
 
-    private static void sleep(Duration duration) {
-        try {
-            Thread.sleep(duration.toMillis());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("재시도 대기 중 인터럽트되었습니다.", e);
-        }
-    }
 }

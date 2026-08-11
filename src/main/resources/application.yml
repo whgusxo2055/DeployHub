@@ -73,6 +73,11 @@ deployhub:
     concurrency: ${JOB_CONCURRENCY:3}
     min-free-disk-bytes: ${MIN_FREE_DISK_BYTES:53687091200}
 
+  # 매니페스트 조회 동시 요청 상한. manifestExecutor 풀 크기와 검증 배치 크기가 이 값
+  # 하나를 공유한다. NCR 전체가 나눠 쓰는 전역 상한이라 env var로 노출하지 않는다.
+  manifest:
+    concurrency: 5
+
   # Phase 4 — FN-06-1 다운로드. downloadExecutor 풀 크기는 JOB_CONCURRENCY ×
   # download.concurrency (0.6절 "Job 3건 × 아이템 3건 = skopeo 최대 9개 동시" 근거).
   download:

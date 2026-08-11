@@ -5,17 +5,15 @@ import java.util.concurrent.Callable;
 import java.util.function.Consumer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 
 /**
- * 구현계획서 0.6절 재시도 정책을 실행하는 공용 실행기. 타임아웃·5xx·429는 재시도하고
- * 401/403/404/디스크 부족은 재시도하지 않는다 — 이 구분은 각 호출자가
- * {@link RetryableCallException}으로 감쌀지 여부로 결정한다({@link #execute} 자체는
- * 재시도 여부를 판단하지 않는다). {@link RetryProperties}는
- * {@code DeployHubApplication}의 {@code @ConfigurationPropertiesScan}으로 빈 등록된다.
+ * 외부 호출 재시도 정책을 실행하는 공용 실행기. 재시도 여부는 {@link #execute}가 아니라
+ * 호출자가 {@link RetryableCallException}으로 감쌀지로 결정한다 —
+ * 타임아웃·5xx·429는 감싸고, 401/403/404·디스크 부족은 감싸지 않아 루프를 건너뛴다.
  */
 @Slf4j
-@Component
+@Service
 public class RetryExecutor {
 
     private final RetryProperties properties;
@@ -26,7 +24,7 @@ public class RetryExecutor {
         this(properties, RetryExecutor::sleepUninterruptibly);
     }
 
-    /** 테스트에서 실제로 대기하지 않도록 대기 동작을 주입할 수 있게 여는 생성자. */
+    /** 테스트가 실제로 대기하지 않도록 대기 동작을 주입하는 생성자. */
     public RetryExecutor(RetryProperties properties, Consumer<Duration> sleeper) {
         this.properties = properties;
         this.sleeper = sleeper;
@@ -60,11 +58,11 @@ public class RetryExecutor {
         }
     }
 
-    // ponytail: Thread.sleep으로 블로킹 대기한다. Phase 2(헬스체크·기동 점검)는 문제없지만
-    // Phase 4/5가 @Async Job 워커 안에서 재사용하면 백오프 동안 스레드 풀 스레드를 하나 묶어둔다.
-    // JOB_CONCURRENCY(기본 3)로는 감당되지만, 그 이상으로 늘려야 하면 리액티브/스케줄러 기반
-    // 비블로킹 재시도로 바꿀 것.
-    private static void sleepUninterruptibly(Duration duration) {
+    /**
+     * ponytail: Thread.sleep 블로킹 대기다 — @Async 워커 안에서 쓰면 백오프 동안 풀 스레드를
+     * 하나 묶는다. JOB_CONCURRENCY(3)로는 감당되지만 더 키우려면 스케줄러 기반 비블로킹으로 바꿀 것.
+     */
+    public static void sleepUninterruptibly(Duration duration) {
         try {
             Thread.sleep(duration.toMillis());
         } catch (InterruptedException e) {

@@ -4,15 +4,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
- * FN-09 업로드 청크 크기를 기동 시점에 검증한다(E-1108). {@code StartupChecks}에 넣지
- * 않는다 — 그건 {@code deployhub.startup-checks.enabled=false}(dev 프로필)로 꺼지는데,
- * 이 값은 외부 연동 도달성과 무관한 순수 설정값이라 꺼질 이유가 없다(코드리뷰로 발견 —
- * dev 프로필에서 정작 이 검증이 통째로 비활성화되는 문제).
- *
- * <p>{@link GraphUploadService}는 같은 프로퍼티를 별도로 {@code @Value} 주입받는다 — 이
- * 검증기는 부작용(기동 실패)만을 위해 존재하고, 그래서 {@code new GraphUploadService(...)}로
- * 직접 생성하는 단위 테스트는 Spring 컨텍스트를 거치지 않아 이 검증에 걸리지 않는다(작은
- * 테스트용 청크 크기를 자유롭게 쓸 수 있는 이유).
+ * 업로드 청크 크기를 기동 시점에 검증한다. {@code StartupChecks}에 넣지 않는 이유는 그게
+ * dev 프로필에서 꺼지는데 이 값은 외부 연동과 무관한 순수 설정값이라 꺼질 이유가 없어서다.
+ * 기동 실패라는 부작용만을 위한 빈이라 {@link GraphUploadService}는 같은 프로퍼티를 따로 주입받는다.
  */
 @Component
 public class UploadChunkSizeValidator {

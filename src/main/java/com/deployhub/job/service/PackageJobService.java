@@ -39,13 +39,13 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Job 조회 + 매니페스트 확정(FN-03) + 중복 방지(FN-11) (구현계획서 Phase 3-1·3). */
+/** Job 조회·매니페스트 확정·중복 방지. */
 @Slf4j
 @Service
 @Transactional(readOnly = true)
 public class PackageJobService {
 
-    /** 구현계획서 Phase 6-4 감사 로그 ({@code PackageCleanupService}와 같은 로거를 공유한다). */
+    /** 감사 로그 ({@code PackageCleanupService}와 같은 로거를 공유한다). */
     private static final Logger AUDIT = LoggerFactory.getLogger("audit");
 
     private final PackageJobRepository packageJobRepository;
@@ -76,16 +76,13 @@ public class PackageJobService {
         this.minFreeDiskBytes = minFreeDiskBytes;
     }
 
-    /** 매니페스트 확정 요청의 기본값 후보(FN-03). 존재하지 않는 메인버전이면 404. */
+    /** 매니페스트 확정 요청의 기본값 후보. 없는 메인버전이면 404. */
     public List<String> changedComponents(String versionName) {
         assertMainVersionExists(versionName);
         return versionComparisonService.changedImageTags(versionName);
     }
 
-    /**
-     * FN-03 매니페스트 확정 + FN-11 중복 방지. 순서 고정 — 실패 시 찌꺼기 행을 남기지
-     * 않도록 검증을 전부 마친 뒤에야 package_item을 재생성한다.
-     */
+    /** 매니페스트 확정. 순서 고정 — 찌꺼기 행을 남기지 않도록 검증을 전부 마친 뒤에야 package_item을 재생성한다. */
     @Transactional
     public PackageJobDetailResponse create(String versionName, PackageJobCreateRequest request) {
         assertMainVersionExists(versionName);
@@ -101,33 +98,29 @@ public class PackageJobService {
         List<String> changedTags = versionComparisonService.changedImageTags(versionName);
         List<String> targetTags =
                 (request.imageTags() == null || request.imageTags().isEmpty()) ? changedTags : request.imageTags();
-        // "선택 0건"(구현계획서 E-0303 정의, 429행)이 기준이다. 기본값(변경분)이 비어도
-        // 호출측이 imageTags[]를 명시하면 그 목록이 최종 기준이라 거부하지 않는다.
+        // 기준은 "선택 0건"이다 — 기본값(변경분)이 비어도 호출측이 imageTags를 명시하면 거부하지 않는다.
         if (targetTags.isEmpty()) {
             throw new ApiException(
                     ErrorCode.NO_PACKAGING_TARGET, "패키징할 대상이 없습니다 (직전 메인버전 대비 변경된 컴포넌트가 없습니다).");
         }
         assertTargetTagsValid(versionName, targetTags);
 
-        // 디스크 확인은 Job 행에 의존하지 않으므로 락(resolveJob)보다 먼저 한다 — 락을
-        // 쥔 채로 파일시스템 I/O(mkdirs/getUsableSpace)를 하면 WORK_DIR이 네트워크
-        // 스토리지일 때 DB 커넥션·행 락이 무기한 묶일 수 있다.
+        // 락보다 먼저 한다 — 락을 쥔 채 파일시스템 I/O를 하면 WORK_DIR이 네트워크 스토리지일 때
+        // DB 커넥션과 행 락이 무기한 묶인다.
         checkDiskSpace(request.force());
         PackageJob job = resolveJob(versionName, request.createdBy(), request.force());
 
         packageItemRepository.deleteByVersionName(versionName);
-        // Hibernate는 같은 트랜잭션 내 INSERT를 DELETE보다 먼저 플러시한다. 재사용 시
-        // 이전과 같은 image_tag를 다시 쓰면 PK 충돌이 나므로 먼저 비운다
-        // (SubVersionService.upsertAll과 동일한 문제).
+        // Hibernate는 같은 트랜잭션 내 INSERT를 DELETE보다 먼저 플러시한다 — 같은 image_tag를
+        // 다시 쓰면 PK 충돌이 나므로 먼저 비운다.
         packageItemRepository.flush();
         for (String tag : targetTags) {
             packageItemRepository.save(
                     PackageItem.builder().versionName(versionName).imageTag(tag).build());
         }
 
-        // Phase 6-4 감사 로그 — 누가 어떤 매니페스트를 강제 여부와 함께 확정했는지 남긴다
-        // (구현계획서 601행). package_job은 메인버전당 1건이라 force 재생성 시 이전 이력이
-        // 덮어써지므로(3장 리스크 5) DB만으로는 이 흔적이 남지 않는다.
+        // package_job은 메인버전당 1건이라 force 재생성 시 이전 이력이 덮어써진다 —
+        // 누가 무엇을 확정했는지는 감사 로그에만 남는다.
         AUDIT.info(
                 "job-created versionName={} createdBy={} force={} imageTags={}",
                 versionName,
@@ -155,7 +148,7 @@ public class PackageJobService {
                 .build();
     }
 
-    /** {@link JobOrchestrator}가 각 단계 전후로 호출하는 상태 전이 전용 메서드. */
+    /** {@link JobOrchestrator}가 단계 전후로 호출하는 상태 전이 전용 메서드. */
     @Transactional
     public void changeStatus(String versionName, JobStatus status) {
         PackageJob job = packageJobRepository
@@ -166,10 +159,8 @@ public class PackageJobService {
     }
 
     /**
-     * FN-08이 폴더를 확보한 뒤 호출한다({@code GraphFolderService}). 엔티티 변경은 서비스
-     * 계층의 {@code @Transactional} 메서드를 거치게 한다 — {@code GraphFolderService}가
-     * 리포지토리를 직접 만지면(비트랜잭션 상태에서 조회 후 detached 인스턴스를 save하는
-     * merge 경로) 그 사이 다른 트랜잭션이 같은 행을 바꿨을 때 조용히 덮어쓸 수 있다.
+     * 폴더 확보 후 {@code GraphFolderService}가 호출한다. 엔티티 변경이 이 {@code @Transactional}
+     * 메서드를 거쳐야 한다 — 리포지토리를 직접 만지면 detached 인스턴스 merge라 동시 변경을 조용히 덮어쓴다.
      */
     @Transactional
     public void applyFolder(String versionName, String spFolderId, String spFolderUrl) {
@@ -181,17 +172,14 @@ public class PackageJobService {
     }
 
     /**
-     * FN-07 수동 재시도. {@code imageTags}를 지정하지 않으면 FAILED 전체가 대상이다 —
-     * DOWNLOADED/UPLOADED 항목은 지정해도 대상에서 제외한다(구현계획서 489행). 작업
-     * 디렉터리 자체가 소실됐으면(E-0703) {@code force=true}일 때만 전 항목을 재수집
-     * 대상으로 되돌린다. 재개는 {@link JobOrchestrator#resume(String)}이 맡는다 — 이
-     * 트랜잭션 커밋 후 컨트롤러가 호출한다(FN-03 create()와 동일한 이유).
+     * 수동 재시도. {@code imageTags}가 비면 FAILED 전체가 대상이고, DOWNLOADED/UPLOADED는 지정해도 제외된다.
+     * 작업 디렉터리가 소실됐으면 {@code force=true}일 때만 전 항목을 되돌린다.
+     * 재개는 이 트랜잭션이 커밋된 뒤 컨트롤러가 {@link JobOrchestrator#resume}으로 호출한다.
      */
     @Transactional
     public PackageJobDetailResponse retry(String versionName, PackageItemRetryRequest request) {
-        // findById(락 없음)를 쓰면 동시 재시도 요청 두 건이 모두 FAILED를 보고 통과해
-        // resume()이 두 번 제출된다 — 같은 tarPath에 두 워커가 동시에 쓰게 된다
-        // (resolveJob의 동시성 방어와 같은 이유, PackageJobRepository.findByVersionName 참고).
+        // 락 없는 findById를 쓰면 동시 재시도 두 건이 모두 FAILED를 보고 통과해
+        // 같은 tarPath에 두 워커가 동시에 쓰게 된다.
         PackageJob job = packageJobRepository
                 .findByVersionName(versionName)
                 .orElseThrow(() -> new ApiException(
@@ -226,8 +214,7 @@ public class PackageJobService {
 
     private List<PackageItem> resolveRetryTargets(List<PackageItem> allItems, PackageItemRetryRequest request, boolean workDirLost) {
         if (workDirLost) {
-            // force=true로만 여기 온다(위에서 이미 걸렀다) — 전건 재수집.
-            return allItems;
+            return allItems; // force=true로만 여기 온다 — 전건 재수집
         }
         if (request.imageTags() == null || request.imageTags().isEmpty()) {
             return allItems.stream().filter(item -> item.getStatus() == PackageItemStatus.FAILED).toList();
@@ -269,10 +256,8 @@ public class PackageJobService {
             throw new ApiException(ErrorCode.INVALID_IMAGE_TAG_SELECTION, "imageTags 목록에 중복된 태그가 있습니다.");
         }
 
-        // 방어 심층화 — 등록 시점(SubVersionService.resolveImageTags)에 이미 문법을
-        // 강제하지만, 그 검증이 생기기 전에 저장된 component 행이 남아 있을 수 있다.
-        // 여기서 다시 걸러야 확정 시점부터라도 오염된 image_tag가 package_item으로
-        // 스냅샷되지 않는다.
+        // 등록 시점에 이미 문법을 강제하지만, 그 검증 이전에 저장된 행이 남아 있을 수 있다 —
+        // 오염된 image_tag가 package_item으로 스냅샷되지 않게 한 번 더 거른다.
         for (String tag : targetTags) {
             try {
                 ImageReference.parse(tag);
@@ -295,16 +280,11 @@ public class PackageJobService {
     }
 
     /**
-     * FN-11 중복 확인. 행이 없으면 신규 생성(동시 요청 시 유니크 제약 위반을 E-1301로
-     * 번역). 행이 있으면 락을 잡고 상태로 재사용 가능 여부를 판정한다 — DONE(미삭제)은
-     * force=true일 때만, FAILED와 이미 정리된 DONE은 항상, 그 외 진행 중 상태는 force로도
-     * 재사용하지 않는다.
+     * 중복 확인. 행이 없으면 신규 생성하고, 있으면 락을 잡고 재사용 가능 여부를 판정한다 —
+     * 미삭제 DONE은 force일 때만, FAILED와 정리된 DONE은 항상, 진행 중 상태는 force로도 안 뚫린다.
      *
-     * <p>존재 확인은 반드시 {@code existsById}(count 쿼리)로 한다 — {@code findById}를
-     * 쓰면 엔티티가 영속성 컨텍스트에 캐시되고, 바로 뒤 {@code findByVersionName}의
-     * {@code FOR UPDATE}는 DB에서는 락을 잡지만 Hibernate가 1차 캐시 인스턴스를 그대로
-     * 반환해 락 획득 전 시점의 stale 값을 보게 된다 — 그러면 두 동시 요청이 모두 같은
-     * (오래된) 상태를 보고 통과해버려 락이 있으나 마나 해진다.
+     * <p>존재 확인은 반드시 {@code existsById}로 할 것 — {@code findById}를 쓰면 엔티티가 1차 캐시에
+     * 올라가 뒤따르는 {@code FOR UPDATE}가 stale 인스턴스를 돌려줘 락이 무력화된다.
      */
     private PackageJob resolveJob(String versionName, String createdBy, boolean force) {
         if (!packageJobRepository.existsById(versionName)) {
@@ -327,7 +307,7 @@ public class PackageJobService {
                 switch (existing.getStatus()) {
                     case DONE -> !alreadyCleaned && !force;
                     case FAILED -> false;
-                    default -> true; // PENDING/VALIDATING/DOWNLOADING/UPLOADING — force로도 안 뚫림
+                    default -> true; // 진행 중 — force로도 안 뚫림
                 };
         if (blocked) {
             throw new ApiException(
@@ -340,9 +320,8 @@ public class PackageJobService {
     }
 
     /**
-     * 신규 INSERT 경합에서만 부른다. 원인이 실제 PK 유니크 제약 위반(MySQL 1062)일 때만
-     * E-1301로 번역하고, 그 밖의 제약 위반(예: {@code createdBy} 길이 초과)은 원래
-     * 예외를 그대로 던져 "다시 시도하세요"라는 오해를 주는 오류로 둔갑하지 않게 한다.
+     * 실제 PK 유니크 위반(MySQL 1062)일 때만 충돌로 번역한다 — 다른 제약 위반까지 뭉뚱그리면
+     * "다시 시도하세요"라는 잘못된 안내가 나간다.
      */
     private RuntimeException translateJobInsertConflict(DataIntegrityViolationException e) {
         Throwable rootCause = NestedExceptionUtils.getMostSpecificCause(e);
@@ -353,12 +332,9 @@ public class PackageJobService {
     }
 
     /**
-     * 확정을 막는 검사다(구현계획서 408행 "부족 시 경고 후 사용자 확인" — force=false면
-     * 409로 차단, force=true는 이 확인을 거친 것으로 보고 진행한다). 실제 소요량 기준
-     * 차단은 Phase 4-2가 매니페스트 layer 크기 합계로 별도 판정한다(E-0602) — 여기서는
-     * 설정된 여유 공간 기준값과만 비교한다. 작업 디렉터리가 아직 없으면 만들어 보고,
-     * 생성 자체가 실패하면(예: 권한 문제) 검사만 건너뛴다 — 그 실패로 매니페스트 확정
-     * 전체가 막혀서는 안 된다.
+     * 설정된 여유 공간 기준값과만 비교한다(실제 소요량 기준 차단은 다운로드 단계가 따로 한다).
+     * force=false면 409로 막고, force=true는 사용자가 확인한 것으로 보고 진행한다.
+     * 디렉터리 생성이 실패하면 검사만 건너뛴다 — 그 실패로 확정 전체가 막혀선 안 된다.
      */
     private void checkDiskSpace(boolean force) {
         File dir = new File(workDir);
@@ -371,8 +347,7 @@ public class PackageJobService {
         if (usableBytes >= minFreeDiskBytes) {
             return;
         }
-        // 서버 파일시스템 경로·실시간 여유 용량은 응답에 싣지 않는다 — 인프라 정보라
-        // 인증이 없는 이 API에도 노출 범위를 좁게 유지한다. 로그에만 남긴다.
+        // 경로·여유 용량은 인프라 정보라 무인증 API 응답에 싣지 않는다 — 로그에만 남긴다.
         log.warn(
                 "디스크 여유 공간 부족: workDir={}, usable={} bytes, threshold={} bytes, force={}",
                 workDir,

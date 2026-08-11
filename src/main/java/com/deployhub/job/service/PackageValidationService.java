@@ -15,39 +15,39 @@ import java.util.Optional;
 import java.util.concurrent.Executor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
- * FN-05 산출물 존재 여부 확인 (구현계획서 453-465행, VALIDATING 단계). 항목별로 레지스트리
- * 매니페스트를 조회해 digest·크기를 "Job 실행 컨텍스트(메모리)"로 반환한다 — DB에 보관하지
- * 않는다(0.4절 FN-05). 404(E-0501)·타임아웃(E-0503)은 해당 항목만 실패 처리하고 나머지는
- * 계속 확인하지만, 확인이 다 끝난 뒤 1건이라도 있으면 전체를 중단시킨다. 401/403(E-0502)은
- * 발견 즉시 {@link ApiException}이 그대로 새어나가 배치 전체를 중단한다 — 남은 항목은
- * 확인하지 않는다.
+ * VALIDATING 단계 — 항목별 매니페스트를 조회해 digest·크기를 메모리 컨텍스트로 반환한다(DB에 담지 않는다).
+ * 404·타임아웃은 해당 항목만 실패시키고 끝까지 확인한 뒤 1건이라도 있으면 전체를 중단하지만,
+ * 401/403은 발견 즉시 새어나가 남은 항목을 확인하지 않는다.
  */
 @Slf4j
 @Service
 public class PackageValidationService {
 
-    private static final int MANIFEST_CHECK_CONCURRENCY = 5;
-
     private final PackageItemRepository packageItemRepository;
     private final NcrRegistryClient ncrRegistryClient;
     private final Executor manifestExecutor;
+    // manifestExecutor 풀 크기와 반드시 같아야 한다 — 같은 프로퍼티를 읽어 어긋날 수 없게 한다.
+    private final int concurrency;
 
     public PackageValidationService(
             PackageItemRepository packageItemRepository,
             NcrRegistryClient ncrRegistryClient,
-            @Qualifier("manifestExecutor") Executor manifestExecutor) {
+            @Qualifier("manifestExecutor") Executor manifestExecutor,
+            @Value("${deployhub.manifest.concurrency:5}") int concurrency) {
         this.packageItemRepository = packageItemRepository;
         this.ncrRegistryClient = ncrRegistryClient;
         this.manifestExecutor = manifestExecutor;
+        this.concurrency = concurrency;
     }
 
     public Map<String, ManifestInfo> validate(String versionName) {
         List<PackageItem> items = packageItemRepository.findByVersionNameOrderByImageTagAsc(versionName);
         List<CheckOutcome> outcomes =
-                BoundedParallelism.mapInBatches(items, MANIFEST_CHECK_CONCURRENCY, manifestExecutor, this::checkItem);
+                BoundedParallelism.mapInBatches(items, concurrency, manifestExecutor, this::checkItem);
 
         List<CheckOutcome> missing = outcomes.stream().filter(outcome -> !outcome.found()).toList();
         if (!missing.isEmpty()) {
@@ -88,8 +88,7 @@ public class PackageValidationService {
             if (e.getErrorCode() == ErrorCode.REGISTRY_TIMEOUT) {
                 return new CheckOutcome(item, null, "E-0503: 레지스트리 응답 시간 초과로 누락 처리했습니다.");
             }
-            // REGISTRY_UNAUTHORIZED 등은 그대로 던져 검증 전체를 중단시킨다(E-0502) —
-            // 여기서 항목 실패로 삼키면 남은 항목을 계속 확인해버린다.
+            // 인증 실패는 그대로 던져 검증 전체를 중단시킨다 — 항목 실패로 삼키면 남은 항목을 계속 확인한다.
             throw e;
         }
     }

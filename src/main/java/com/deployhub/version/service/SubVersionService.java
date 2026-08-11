@@ -22,9 +22,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Version History 수동 등록·수정 (구현계획서 Phase 1-2). {@code PUT .../sub-versions}는
- * 요청에 포함된 code만 생성·수정한다(upsert) — 목록에서 빠진 기존 서브버전은 건드리지
- * 않는다. 삭제는 별도의 {@code DELETE /api/sub-versions/{id}}로만 한다.
+ * 서브버전 등록·수정. 요청에 포함된 code만 upsert하고 목록에서 빠진 기존 서브버전은 건드리지 않는다 —
+ * 삭제는 {@code DELETE /api/sub-versions/{id}}로만 한다.
  */
 @Service
 @RequiredArgsConstructor
@@ -43,7 +42,7 @@ public class SubVersionService {
         }
         manifestLockGuard.assertNotLocked(versionName);
 
-        // code -> 이번 요청이 적용할 최종 image_tag 목록. 유일성 검증과 실제 저장이 같은 값을 쓴다.
+        // code -> 최종 image_tag 목록. 유일성 검증과 실제 저장이 같은 값을 쓰게 한다.
         Map<String, List<String>> newTagsByCode = new HashMap<>();
         for (SubVersionUpsertRequest request : requests) {
             List<String> tags = resolveImageTags(request);
@@ -71,8 +70,8 @@ public class SubVersionService {
             List<Component> existingComponents = componentRepository.findBySubVersionIdOrderBySortOrderAsc(subVersion.getId());
             if (!existingComponents.isEmpty()) {
                 componentRepository.deleteAll(existingComponents);
-                // Hibernate는 같은 트랜잭션 내 INSERT를 DELETE보다 먼저 플러시한다.
-                // 재생성되는 컴포넌트가 이전과 같은 image_tag를 쓰면 PK 충돌이 나므로 먼저 비운다.
+                // Hibernate는 같은 트랜잭션 내 INSERT를 DELETE보다 먼저 플러시한다 —
+                // 같은 image_tag를 다시 쓰면 PK 충돌이 나므로 먼저 비운다.
                 componentRepository.flush();
             }
 
@@ -103,7 +102,7 @@ public class SubVersionService {
                 .findById(subVersionId)
                 .orElseThrow(() -> new ApiException(ErrorCode.SUB_VERSION_NOT_FOUND));
         manifestLockGuard.assertNotLocked(subVersion.getMainVersionName());
-        // component는 FK ON DELETE CASCADE로 함께 삭제된다 (V1__init_schema.sql).
+        // component는 FK ON DELETE CASCADE로 함께 삭제된다.
         subVersionRepository.delete(subVersion);
     }
 
@@ -116,10 +115,8 @@ public class SubVersionService {
 
     /**
      * 컴포넌트를 명시하지 않으면 {@code code:version} 1건을 자동 생성한다. 어느 경로든
-     * {@link ImageReference#parse}로 Docker repository/tag 문법을 강제한다 — 이 값이
-     * Phase 3에서 package_item으로 확정 저장되고 Phase 4에서 NCR REST 경로·skopeo
-     * 인자에 그대로 들어가므로, 자유 문자열이 들어오는 이 지점(등록·수정)에서 막아야
-     * 인젝션 소지가 있는 문자가 뒤 단계로 흘러가지 않는다.
+     * {@link ImageReference#parse}로 문법을 강제한다 — 이 값이 그대로 NCR REST 경로와 skopeo
+     * 인자로 들어가므로, 자유 문자열이 들어오는 이 지점에서 막아야 뒤 단계로 흘러가지 않는다.
      */
     private List<String> resolveImageTags(SubVersionUpsertRequest request) {
         List<String> tags = (request.imageTags() == null || request.imageTags().isEmpty())

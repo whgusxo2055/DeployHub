@@ -16,12 +16,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientResponseException;
 
 /**
- * FN-08 업로드 대상 폴더 확보 (구현계획서 Phase 5 작업 항목 1, 520-540행). 폴더명은 항상
- * {@code versionName}이고 충돌 시 이름을 바꾸지 않는다 — 경로로 먼저 조회해 있으면 재사용,
- * 없으면 상위 경로 밑에 생성한다.
- *
- * <p>공유 링크 type/scope("view"/"organization")는 5장 확정 사항 4번으로 고정됐다 — 운영
- * 중 바뀌지 않는 값이라 환경변수로 노출하지 않고 상수로 둔다.
+ * 업로드 대상 폴더 확보. 폴더명은 항상 {@code versionName}이고 충돌해도 이름을 바꾸지 않는다 —
+ * 경로로 먼저 조회해 있으면 재사용, 없으면 상위 경로 밑에 생성한다.
+ * 공유 링크 type/scope는 운영 중 바뀌지 않는 값이라 환경변수로 노출하지 않고 상수로 둔다.
  */
 @Slf4j
 @Service
@@ -39,9 +36,8 @@ public class GraphFolderService {
     private final ObjectMapper objectMapper;
 
     /**
-     * Job의 UPLOADING 단계 진입 시 1회 호출된다. {@code package_job.sp_folder_id}/
-     * {@code sp_folder_url}을 갱신하고, {@link GraphUploadService}가 바로 쓸 수 있도록
-     * Drive Item ID를 반환한다.
+     * UPLOADING 단계 진입 시 1회 호출된다. {@code sp_folder_id}/{@code sp_folder_url}을 갱신하고
+     * {@link GraphUploadService}가 바로 쓸 Drive Item ID를 반환한다.
      */
     public String ensureFolder(String versionName) {
         validateFolderName(versionName);
@@ -58,9 +54,8 @@ public class GraphFolderService {
             return folder.webUrl();
         });
 
-        // 상태 변경은 서비스 계층의 @Transactional 메서드를 거친다 — 이 클래스가 리포지토리를
-        // 직접 만지면 비트랜잭션 조회~저장 사이에 다른 트랜잭션의 변경을 덮어쓸 수 있다
-        // (코드리뷰로 발견, PackageJobService.applyFolder 참고).
+        // 상태 변경은 서비스 계층의 @Transactional 메서드를 거친다 — 리포지토리를 직접 만지면
+        // 비트랜잭션 조회~저장 사이에 다른 트랜잭션의 변경을 덮어쓴다.
         packageJobService.applyFolder(versionName, folder.id(), linkUrl);
         return folder.id();
     }
@@ -69,9 +64,8 @@ public class GraphFolderService {
         if (name.isBlank() || name.length() > MAX_NAME_LENGTH || !name.strip().equals(name)) {
             throw new IllegalStateException("E-1004: 폴더명 규칙을 위반했습니다: " + name);
         }
-        // 전부 '.'인 이름(".", "..")은 SharePoint 경로 addressing에서 상위 경로를 가리킬
-        // 위험이 있다 — versionName이 지금은 상위 계층의 정규식으로 막혀 있어 현실적으로
-        // 도달하지 않지만, 그 검증이 느슨해지는 미래를 대비한 방어 심층화다(코드리뷰).
+        // 전부 '.'인 이름(".", "..")은 SharePoint 경로 addressing에서 상위 경로를 가리킬 수 있다 —
+        // 상위 계층 정규식이 이미 막지만 그 검증이 느슨해지는 미래를 대비한 방어층이다.
         if (name.chars().allMatch(c -> c == '.')) {
             throw new IllegalStateException("E-1004: 폴더명에 허용되지 않는 문자가 있습니다: " + name);
         }
@@ -91,7 +85,7 @@ public class GraphFolderService {
             return parseFolderItem(response);
         } catch (RestClientResponseException ex) {
             if (ex.getStatusCode().value() == 409) {
-                // E-1001 — 조회와 생성 사이에 누가 먼저 만들었다. 실패가 아니라 재사용으로 본다.
+                // 조회와 생성 사이에 누가 먼저 만든 것 — 실패가 아니라 재사용으로 본다.
                 log.info("폴더 생성 경합(409) — 재조회하여 재사용합니다: versionName={}", versionName);
                 return graphApiClient
                         .getOrNull(folderPath(driveId, versionName))
@@ -115,10 +109,7 @@ public class GraphFolderService {
         return "/drives/%s/root:%s/%s".formatted(driveId, graphProperties.rootPath(), versionName);
     }
 
-    /**
-     * {@code $top=999}로 기본 페이지 크기(200)보다 넉넉히 받는다 — 한 Job의 산출물 수가
-     * 그 이상이 될 일은 없지만, nextLink를 안 따라가는 대신 최소한의 안전판으로 둔다.
-     */
+    /** ponytail: nextLink를 따라가지 않는 대신 {@code $top=999}로 기본 페이지 크기보다 넉넉히 받는다. */
     private void clearExistingChildren(String driveId, String folderItemId) {
         String response = graphApiClient.get("/drives/%s/items/%s/children?$top=999".formatted(driveId, folderItemId));
         for (String childId : parseChildIds(response)) {
@@ -140,9 +131,8 @@ public class GraphFolderService {
     }
 
     /**
-     * 테넌트 정책으로 organization 범위 공유 링크가 막히면 401/403(ApiException)·400/기타
-     * (raw {@code RestClientResponseException}) 등 형태가 다양하다 — 어느 쪽이든 Job을
-     * 막지 않고 폴더 webUrl로 대체한다(구현계획서 540행, E-1005).
+     * 테넌트 정책으로 공유 링크가 막히면 예외 형태가 다양하다 —
+     * 어느 쪽이든 Job을 막지 않고 폴더 webUrl로 대체한다.
      */
     private Optional<String> createShareLink(String driveId, String folderItemId) {
         Map<String, Object> body = Map.of("type", LINK_TYPE, "scope", LINK_SCOPE);
@@ -155,7 +145,7 @@ public class GraphFolderService {
         }
     }
 
-    /** Graph 오류 응답 본문을 통째로 로그에 옮기지 않는다 — 상태 코드/오류 코드 정도만 남긴다. */
+    /** 오류 응답 본문을 통째로 로그에 옮기지 않는다 — 상태 코드 정도만 남긴다. */
     private String describeBriefly(RuntimeException ex) {
         if (ex instanceof RestClientResponseException rex) {
             return "status=" + rex.getStatusCode().value();

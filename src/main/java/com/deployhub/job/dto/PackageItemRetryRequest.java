@@ -7,7 +7,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import java.util.List;
 
-/** FN-07 수동 재시도 요청. {@code imageTags}를 비워두면 FAILED 항목 전체가 대상이 된다. */
+/** 수동 재시도 요청. {@code imageTags}를 비우면 FAILED 항목 전체가 대상이다. */
 public record PackageItemRetryRequest(
         @Size(max = 500) @Schema(description = "재시도 대상. 비우면 FAILED 전체")
         List<@NotBlank @Size(max = 200) String> imageTags,

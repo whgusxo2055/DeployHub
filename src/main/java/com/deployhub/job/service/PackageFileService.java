@@ -25,10 +25,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * FN-10 업로드 파일 URL 목록 제공 (구현계획서 Phase 6-1, 586-590행). 조회 전용이라
- * {@link PackageJobService}(생성·상태 전이)와 분리했다.
- */
+/** 업로드 파일 URL 목록 제공. 조회 전용이라 {@link PackageJobService}(생성·상태 전이)와 분리했다. */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -41,9 +38,8 @@ public class PackageFileService {
     private final ComponentRepository componentRepository;
 
     /**
-     * {@code DONE}이 아니면 목록 대신 진행 상태를 알린다(E-1201) — 오류 응답의
-     * {@code details}에 현재 상태와 진행률을 실어, 호출측이 폴링 엔드포인트를 한 번 더
-     * 부르지 않고도 "아직 안 끝났다"를 그대로 표시할 수 있게 한다.
+     * {@code DONE}이 아니면 목록 대신 진행 상태를 알린다 — 오류 응답 {@code details}에 상태와 진행률을 실어
+     * 호출측이 폴링 엔드포인트를 한 번 더 부르지 않아도 되게 한다.
      */
     public PackageFilesResponse listFiles(String versionName) {
         PackageJob job = packageJobRepository
@@ -74,11 +70,7 @@ public class PackageFileService {
                 .build();
     }
 
-    /**
-     * {@code image_tag} → {@code sub_version} 역참조(구현계획서 589행). 항목마다 조회하지
-     * 않고 메인버전 단위로 두 번만 읽어 맵을 만든다 — 기존 리포지토리 메서드를 그대로
-     * 쓰므로 새 쿼리가 필요 없다.
-     */
+    /** {@code image_tag} → {@code sub_version} 역참조. 항목마다 조회하지 않고 메인버전 단위로 두 번만 읽는다. */
     private Map<String, SubVersion> subVersionByImageTag(String mainVersionName) {
         Map<Long, SubVersion> byId = subVersionRepository.findByMainVersionNameOrderBySortOrderAsc(mainVersionName)
                 .stream()
@@ -105,11 +97,7 @@ public class PackageFileService {
                 .build();
     }
 
-    /**
-     * 확정 시점에 {@code PackageJobService.assertTargetTagsValid}가 문법을 강제하므로 여기서
-     * 파싱이 깨질 일은 없다. 그럼에도 그 검증이 생기기 전에 저장된 행이 남아 있을 수 있어,
-     * 파일명 하나 때문에 목록 조회 전체가 500이 되지 않게 한다.
-     */
+    /** 확정 시점에 문법이 강제되지만, 그 이전에 저장된 행 하나 때문에 목록 조회 전체가 500이 되지 않게 한다. */
     private String tarFileNameOrNull(String imageTag) {
         try {
             return ImageReference.parse(imageTag).tarFileName();

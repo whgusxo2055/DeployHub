@@ -4,7 +4,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import java.util.List;
 import lombok.Builder;
 
-/** FN-01 등 목록 조회 응답의 공통 페이지 포맷. */
+/** 목록 조회 응답의 공통 페이지 포맷. */
 @Schema(description = "페이지 응답")
 @Builder
 public record PageResponse<T>(

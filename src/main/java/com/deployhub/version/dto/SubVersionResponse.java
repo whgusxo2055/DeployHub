@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import lombok.Builder;
 
-/** FN-02 계층 응답의 서브버전 항목. */
+/** 계층 응답의 서브버전 항목. */
 @Builder
 public record SubVersionResponse(
         Long id,

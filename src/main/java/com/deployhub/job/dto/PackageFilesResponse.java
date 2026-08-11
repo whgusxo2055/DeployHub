@@ -5,7 +5,7 @@ import java.time.Instant;
 import java.util.List;
 import lombok.Builder;
 
-/** FN-10 업로드 파일 URL 목록 (구현계획서 Phase 6-1). */
+/** 업로드 파일 URL 목록. */
 @Builder
 public record PackageFilesResponse(
         @Schema(description = "메인버전명", example = "2026.08.05") String versionName,

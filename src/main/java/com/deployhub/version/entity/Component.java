@@ -11,10 +11,7 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-/**
- * ERD component — 컴포넌트 (Docker Image 단위). PK가 (sub_version_id, image_tag) 복합키라
- * 단일 식별자가 없다. API는 이 컴포넌트를 {@code image_tag} 값으로 지정한다 (구현계획서 0.2절).
- */
+/** 컴포넌트(Docker Image 단위). PK가 복합키라 단일 식별자가 없어 API는 {@code image_tag}로 지정한다. */
 @Entity
 @Table(name = "component")
 @IdClass(ComponentId.class)

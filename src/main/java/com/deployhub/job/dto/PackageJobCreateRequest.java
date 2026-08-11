@@ -7,10 +7,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import java.util.List;
 
-/**
- * FN-03 매니페스트 확정 요청. {@code imageTags}를 비워두면 변경된 컴포넌트 전체
- * (changed-components 응답)가 기본값이 된다.
- */
+/** 매니페스트 확정 요청. {@code imageTags}를 비우면 변경된 컴포넌트 전체가 기본값이다. */
 public record PackageJobCreateRequest(
         @Size(max = 500) @Schema(description = "패키징 대상. 비우면 변경된 컴포넌트 전체가 기본값")
         List<@NotBlank @Size(max = 200) String> imageTags,

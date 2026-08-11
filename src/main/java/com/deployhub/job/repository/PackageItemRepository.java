@@ -10,7 +10,7 @@ public interface PackageItemRepository extends JpaRepository<PackageItem, Packag
 
     List<PackageItem> findByVersionNameOrderByImageTagAsc(String versionName);
 
-    /** Job 목록 API가 여러 Job의 항목을 한 번에 모아 진행률을 집계할 때 쓴다 (N+1 방지). */
+    /** 목록 API가 여러 Job의 진행률을 한 번에 집계할 때 쓴다(N+1 방지). */
     List<PackageItem> findByVersionNameIn(Collection<String> versionNames);
 
     void deleteByVersionName(String versionName);

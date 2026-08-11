@@ -30,7 +30,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-/** FN-01·FN-02와 Version History 등록·수정(구현계획서 Phase 1-2·3·4). */
+/** 메인버전 목록·상세 조회와 등록·수정. */
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)

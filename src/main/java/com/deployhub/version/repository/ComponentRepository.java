@@ -15,9 +15,8 @@ public interface ComponentRepository extends JpaRepository<Component, ComponentI
     List<Component> findBySubVersionIdIn(Collection<Long> subVersionIds);
 
     /**
-     * 메인버전 내 {@code image_tag} 유일성 검증(E-0203)에 쓴다. 이 검증은 메인버전
-     * 범위로 한정해야 한다 — 서로 다른 메인버전이 같은 image_tag를 공유하는 것은
-     * FN-02 변경 여부 판정이 성립하기 위한 정상 상태다 (구현계획서 0.4절).
+     * 메인버전 내 {@code image_tag} 유일성 검증용. 반드시 메인버전 범위로 한정할 것 —
+     * 서로 다른 메인버전이 같은 태그를 공유하는 건 변경 여부 판정이 성립하기 위한 정상 상태다.
      */
     @Query("""
             SELECT c FROM Component c
@@ -27,7 +26,7 @@ public interface ComponentRepository extends JpaRepository<Component, ComponentI
             """)
     List<Component> findByMainVersionName(@Param("mainVersionName") String mainVersionName);
 
-    /** FN-01 목록의 componentCount 집계용. */
+    /** 목록의 componentCount 집계용. */
     @Query("""
             SELECT COUNT(c) FROM Component c
             WHERE c.subVersionId IN (

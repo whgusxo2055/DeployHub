@@ -5,7 +5,7 @@ import java.time.Instant;
 import java.util.List;
 import lombok.Builder;
 
-/** 4.3절 공통 오류 응답 스키마. */
+/** 공통 오류 응답 스키마. */
 @Schema(description = "공통 오류 응답")
 @Builder
 public record ApiErrorResponse(

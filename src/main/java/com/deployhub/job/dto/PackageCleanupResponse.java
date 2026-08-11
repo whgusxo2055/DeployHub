@@ -4,10 +4,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import java.util.List;
 import lombok.Builder;
 
-/**
- * FN-11 정리 결과 (구현계획서 Phase 6-2·6-3). 정리 배치와 수동 정리 API가 같은 형태를 쓴다 —
- * 수동 정리는 대상이 1건인 배치와 다르지 않다.
- */
+/** 정리 결과. 배치와 수동 정리가 같은 형태를 쓴다 — 수동 정리는 대상이 1건인 배치와 다르지 않다. */
 @Builder
 public record PackageCleanupResponse(
         @Schema(description = "true면 대상만 산출하고 실제 삭제는 하지 않는다") boolean dryRun,

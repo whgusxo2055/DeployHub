@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
-/** 4.3절 오류 응답 스키마를 모든 컨트롤러에 일괄 적용한다. */
+/** 공통 오류 응답 스키마를 모든 컨트롤러에 일괄 적용한다. */
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -27,7 +27,7 @@ public class GlobalExceptionHandler {
                 .map(fieldError -> "%s: %s".formatted(fieldError.getField(), fieldError.getDefaultMessage()))
                 .toList();
 
-        // 검증에 실패한 요청 DTO가 자기 도메인 코드를 알려준다 (E-0000 같은 공용 코드를 쓰지 않는다).
+        // 검증에 실패한 DTO가 자기 도메인 코드를 알려준다 — 공용 "검증 실패" 코드를 쓰지 않는다.
         ErrorCode errorCode = ex.getBindingResult().getTarget() instanceof ValidatedRequest validatedRequest
                 ? validatedRequest.validationErrorCode()
                 : logUnmappedValidationTargetAndFallBack(ex);
@@ -36,8 +36,7 @@ public class GlobalExceptionHandler {
                 .body(ApiErrorResponse.of(errorCode, errorCode.getDefaultMessage(), details));
     }
 
-    // 예: GET /api/package-jobs?status=foo — JobStatus 같은 enum 쿼리 파라미터가 유효하지
-    // 않으면 여기로 온다. 없으면 handleUnexpected가 500 + 스택트레이스로 처리해버린다.
+    // enum 쿼리 파라미터가 유효하지 않으면 여기로 온다 — 없으면 클라이언트 실수가 500이 된다.
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<ApiErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
         return ResponseEntity.status(ErrorCode.INVALID_QUERY_PARAMETER.getHttpStatus())
@@ -48,10 +47,7 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 매핑되지 않은 경로는 정적 리소스 조회로 넘어가고, 거기서도 없으면 이 예외가 난다.
-     * 없으면 {@code handleUnexpected}가 500 + 스택트레이스로 처리해 <b>클라이언트의 URL
-     * 오타가 서버 장애로 보고된다</b> — 오류 로그도 스택트레이스로 뒤덮인다
-     * ({@code MethodArgumentTypeMismatchException}을 따로 잡아 둔 것과 같은 이유).
+     * 매핑되지 않은 경로. 이게 없으면 클라이언트의 URL 오타가 500 + 스택트레이스로 보고된다.
      */
     @ExceptionHandler(NoResourceFoundException.class)
     public ResponseEntity<ApiErrorResponse> handleNoResource(NoResourceFoundException ex) {

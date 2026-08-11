@@ -12,11 +12,9 @@ import org.springframework.data.jpa.repository.Lock;
 public interface PackageJobRepository extends JpaRepository<PackageJob, String> {
 
     /**
-     * 재사용(FAILED 재실행, force=true인 DONE 재생성) 경로 전용 — 이 경우는 INSERT가
-     * 아니라 UPDATE라 PK 제약이 동시성을 막아주지 못한다. 존재하지 않는 PK에는 이 락을
-     * 걸지 않는다 — MySQL InnoDB가 없는 행에 FOR UPDATE를 걸면 갭 락이 생겨, 두 트랜잭션이
-     * 동시에 INSERT할 때 깔끔한 유니크 제약 오류 대신 데드락(1213)이 날 수 있다. 신규
-     * 생성은 그냥 save 후 제약 위반 예외를 번역하는 쪽(E-1301)이 단순하고 확실하다.
+     * 재사용 경로 전용 — UPDATE라 PK 제약이 동시성을 막아주지 못한다.
+     * 존재하지 않는 PK에는 걸지 말 것 — InnoDB가 갭 락을 잡아 동시 INSERT가 깔끔한 유니크 위반 대신
+     * 데드락으로 터진다. 신규 생성은 save 후 제약 위반을 번역하는 쪽이 확실하다.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<PackageJob> findByVersionName(String versionName);
@@ -25,13 +23,9 @@ public interface PackageJobRepository extends JpaRepository<PackageJob, String> 
     List<PackageJob> findByStatusInOrderByCreatedAtDesc(Collection<JobStatus> statuses);
 
     /**
-     * FN-11 보존·정리 배치(Phase 6). 정렬이 곧 "최근 RETENTION_COUNT건 보호"의 기준이라
-     * 배치가 재정렬하지 않고 앞에서부터 세기만 하면 된다. 메인버전당 Job이 1건이라 전건을
-     * 메모리로 가져와도 되는 규모다 — 기한·보호 건수 판정은 자바에서 한다
-     * ({@code status IN (...)} + {@code ORDER BY finished_at DESC}라 filesort가 붙지만
-     * 전건이 수십 행 규모라 무해하다).
-     * 여기서 나온 목록은 스냅샷이므로 실제 삭제 전에 {@code PackagePurgeService}가 락을
-     * 잡고 상태를 다시 확인한다.
+     * 보존·정리 배치용. 정렬이 곧 "최근 RETENTION_COUNT건 보호"의 기준이라 배치는 앞에서부터 세기만 하면 된다.
+     * ponytail: 전건을 메모리로 가져와 자바에서 판정한다 — 메인버전당 Job이 1건이라 수십 행 규모다.
+     * 결과는 스냅샷이므로 실제 삭제 전에 {@code PackagePurgeService}가 락을 잡고 재확인한다.
      */
     List<PackageJob> findByStatusInOrderByFinishedAtDesc(Collection<JobStatus> statuses);
 }

@@ -8,10 +8,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.util.List;
 
-/**
- * 서브버전 등록·수정 항목. {@code imageTags}를 비워두면 {@code code:version} 1건을
- * 자동 생성한다 (구현계획서 Phase 1-2 컴포넌트 생성 규칙).
- */
+/** 서브버전 등록·수정 항목. {@code imageTags}를 비우면 {@code code:version} 1건을 자동 생성한다. */
 public record SubVersionUpsertRequest(
         @NotBlank @Size(max = 50) @Schema(example = "cc") String code,
         @NotBlank @Size(max = 50) @Schema(example = "v2.0.25") String version,

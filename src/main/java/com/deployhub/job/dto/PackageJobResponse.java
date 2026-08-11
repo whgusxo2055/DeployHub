@@ -9,10 +9,7 @@ import java.util.List;
 import java.util.Set;
 import lombok.Builder;
 
-/**
- * 폴링 대상(GET /api/package-jobs/{versionName})의 Job 요약. 응답을 가볍게 유지하기 위해
- * (구현계획서 418행) 진행률만 담고 항목 배열은 {@link PackageJobDetailResponse}가 함께 싣는다.
- */
+/** Job 요약. 응답을 가볍게 유지하려 진행률만 담고 항목 배열은 {@link PackageJobDetailResponse}가 싣는다. */
 @Builder
 public record PackageJobResponse(
         String versionName,

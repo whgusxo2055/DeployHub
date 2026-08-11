@@ -3,7 +3,7 @@ package com.deployhub.job.dto;
 import com.deployhub.job.entity.PackageItem;
 import lombok.Builder;
 
-/** 폴링 응답(GET .../package-jobs/{versionName})의 항목별 상태. */
+/** 폴링 응답의 항목별 상태. */
 @Builder
 public record PackageItemResponse(
         String imageTag, String status, Long fileSize, Integer retryCount, String errorMessage, String fileUrl) {

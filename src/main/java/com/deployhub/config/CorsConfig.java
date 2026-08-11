@@ -6,10 +6,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
-/**
- * 프론트엔드가 이 백엔드와 같은 오리진에 배포되지 않는다 (구현계획서 0.1·0.3절, 프론트엔드는
- * 별도 진행). {@code CORS_ALLOWED_ORIGINS} 환경변수로 허용 오리진을 받는다.
- */
+/** 프론트엔드가 다른 오리진에 배포된다. 허용 오리진은 {@code CORS_ALLOWED_ORIGINS}로 받는다. */
 @Configuration
 public class CorsConfig implements WebMvcConfigurer {
 

@@ -32,9 +32,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * FN-03 매니페스트 확정과 Job 조회(구현계획서 Phase 3). 메인버전 경로에 종속된 엔드포인트도
- * 여기 둔다 — 기능 소유권(job 도메인) 기준으로 나눴다. {@link com.deployhub.version.controller.MainVersionController}가
- * job 서비스를 주입받지 않도록 하기 위함이다.
+ * 매니페스트 확정과 Job 조회. 메인버전 경로에 종속된 엔드포인트도 기능 소유권 기준으로 여기 둔다 —
+ * {@link com.deployhub.version.controller.MainVersionController}가 job 서비스를 주입받지 않게 하기 위해서다.
  */
 @RestController
 @Tag(name = "패키지 Job")
@@ -62,13 +61,11 @@ public class PackageJobController {
     public ResponseEntity<PackageJobDetailResponse> createPackageJob(
             @PathVariable String versionName, @Valid @RequestBody PackageJobCreateRequest request) {
         PackageJobDetailResponse created = packageJobService.create(versionName, request);
-        // 생성 트랜잭션이 커밋된 뒤에 워커를 제출한다 — 서비스 메서드 안에서 제출하면
-        // 워커가 커밋 전에 시작해 아직 안 보이는 Job 행을 조회하게 된다.
+        // 커밋 후에 워커를 제출한다 — 서비스 안에서 제출하면 워커가 아직 안 보이는 Job 행을 조회한다.
         try {
             jobOrchestrator.start(versionName);
         } catch (TaskRejectedException e) {
-            // 큐(queueCapacity=100)까지 가득 찬 경우 — Job 행은 이미 커밋됐으므로 여기서
-            // 바로 FAILED로 돌려 PENDING 좀비로 남지 않게 한다(재기동 전에도 즉시 재시도 가능).
+            // 큐까지 가득 찬 경우 — Job 행은 이미 커밋됐으므로 바로 FAILED로 돌려 PENDING 좀비를 막는다.
             packageJobService.changeStatus(versionName, JobStatus.FAILED);
             throw new ApiException(ErrorCode.JOB_QUEUE_SATURATED);
         }
@@ -126,9 +123,8 @@ public class PackageJobController {
     }
 
     /**
-     * {@code dryRun} 기본값이 {@code true}다 — 인증이 없는 API라 파라미터 없는 POST 한 방이
-     * SharePoint 폴더를 실제로 지우면 안 된다(Swagger UI의 "Try it out" 기본 상태가 곧
-     * 실삭제가 된다). 실행은 {@code dryRun=false}로 명시해야 한다.
+     * {@code dryRun} 기본값이 {@code true}다 — 무인증 API라 파라미터 없는 POST 한 방이
+     * (Swagger UI의 "Try it out" 기본 상태가) 실삭제가 되면 안 된다.
      */
     @Operation(
             summary = "보존·정리 배치 수동 실행 (FN-11)",

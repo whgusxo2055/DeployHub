@@ -4,12 +4,8 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Builder;
 
 /**
- * FN-10 파일별 정보 (구현계획서 588행). 개별 재다운로드용 보조 정보다 — 기본 창구는
- * {@link PackageFilesResponse#folderUrl()} 폴더 공유 링크 1건이다.
- *
- * <p>서브버전 정보는 {@code package_item.image_tag} → {@code component} → {@code sub_version}
- * 역참조로 채운다. 확정 시점 스냅샷인 {@code image_tag}에 대응하는 컴포넌트가 그 뒤
- * 삭제됐으면(매니페스트 보호가 FAILED Job은 막지 않는다) 두 필드는 null이 된다.
+ * 파일별 정보. 개별 재다운로드용 보조 정보이고 기본 창구는 {@link PackageFilesResponse#folderUrl()}이다.
+ * 서브버전 정보는 역참조로 채우므로, 확정 후 해당 컴포넌트가 삭제됐으면 두 필드가 null이 된다.
  */
 @Builder
 public record PackageFileResponse(

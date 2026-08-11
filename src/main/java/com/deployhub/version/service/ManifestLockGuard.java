@@ -4,13 +4,10 @@ import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.job.repository.PackageJobRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 
-/**
- * 확정된 매니페스트 보호 (구현계획서 Phase 1-2, E-0204). package_job이 존재하고
- * 상태가 FAILED가 아니면 "진행 중이거나 완료된" 것으로 보아 서브버전 수정·삭제를 막는다.
- */
-@Component
+/** 확정된 매니페스트 보호 — package_job이 있고 FAILED가 아니면 서브버전 수정·삭제를 막는다. */
+@Service
 @RequiredArgsConstructor
 public class ManifestLockGuard {
 
