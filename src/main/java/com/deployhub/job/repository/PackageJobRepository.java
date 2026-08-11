@@ -1,5 +1,7 @@
 package com.deployhub.job.repository;
 
+import com.deployhub.common.ApiException;
+import com.deployhub.common.ErrorCode;
 import com.deployhub.job.entity.JobStatus;
 import com.deployhub.job.entity.PackageJob;
 import jakarta.persistence.LockModeType;
@@ -18,6 +20,24 @@ public interface PackageJobRepository extends JpaRepository<PackageJob, String> 
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<PackageJob> findByVersionName(String versionName);
+
+    /** 락 없는 조회. 상태를 보고 분기하거나 갱신할 거라면 {@link #lockOrThrow}를 쓸 것. */
+    default PackageJob getOrThrow(String versionName) {
+        return findById(versionName).orElseThrow(() -> notFound(versionName));
+    }
+
+    /**
+     * 락을 쥔 조회. 상태 체크 후 갱신하는 경로는 반드시 이쪽이어야 한다 —
+     * 락 없이 읽으면 동시 요청 두 건이 같은 상태를 보고 둘 다 통과한다.
+     */
+    default PackageJob lockOrThrow(String versionName) {
+        return findByVersionName(versionName).orElseThrow(() -> notFound(versionName));
+    }
+
+    private static ApiException notFound(String versionName) {
+        return new ApiException(
+                ErrorCode.PACKAGE_JOB_NOT_FOUND, "메인버전 '%s'의 패키지 Job이 없습니다.".formatted(versionName));
+    }
 
     /** Job 목록 API의 상태 필터와 기동 시 고아 Job 정리가 함께 쓴다. */
     List<PackageJob> findByStatusInOrderByCreatedAtDesc(Collection<JobStatus> statuses);

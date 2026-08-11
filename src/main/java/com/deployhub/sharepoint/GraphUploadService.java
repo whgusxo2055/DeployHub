@@ -7,6 +7,7 @@ import com.deployhub.common.retry.RetryProperties;
 import com.deployhub.job.entity.PackageItem;
 import com.deployhub.job.entity.PackageItemStatus;
 import com.deployhub.job.repository.PackageItemRepository;
+import com.deployhub.job.service.PackageItemFailure;
 import com.deployhub.registry.ImageReference;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -112,7 +113,7 @@ public class GraphUploadService {
                 }
                 item.incrementRetryCount();
                 packageItemRepository.save(item);
-                RetryExecutor.sleepUninterruptibly(retryProperties.backoffFor(attempt));
+                RetryExecutor.sleepOrThrowOnInterrupt(retryProperties.backoffFor(attempt));
             }
         }
     }
@@ -189,7 +190,7 @@ public class GraphUploadService {
                 return result;
             }
             attempt++;
-            RetryExecutor.sleepUninterruptibly(
+            RetryExecutor.sleepOrThrowOnInterrupt(
                     result.retryAfter() != null ? result.retryAfter() : retryProperties.backoffFor(attempt));
         }
     }
@@ -244,15 +245,7 @@ public class GraphUploadService {
     }
 
     private boolean failItem(PackageItem item, String dbMessage, String detail) {
-        log.warn(
-                "업로드 항목 실패: versionName={}, imageTag={}, reason={}, detail={}",
-                item.getVersionName(),
-                item.getImageTag(),
-                dbMessage,
-                detail);
-        item.markFailed(dbMessage);
-        packageItemRepository.save(item);
-        return false;
+        return PackageItemFailure.fail(packageItemRepository, item, dbMessage, detail);
     }
 
 }

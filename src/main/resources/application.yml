@@ -40,20 +40,18 @@ deployhub:
   startup-checks:
     enabled: ${STARTUP_CHECKS_ENABLED:true}
   cors:
-    # 프론트엔드가 별도 오리진에서 호출한다 (구현계획서 0.3·0.6절). 쉼표로 여러 값 허용.
+    # 프론트엔드가 별도 오리진에서 호출한다. 쉼표로 여러 값 허용.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:*}
 
-  # Phase 2 — FN-04-1 NCP Container Registry. Public Endpoint 사용 — 패키징 서버가 VPC
-  # 밖이어도 아웃바운드 443만 열리면 도달 가능하다. 인증은 Access Key Id/Secret Key
-  # Basic (docker login과 동일한 자격 증명).
+  # NCP Container Registry. Public Endpoint라 아웃바운드 443만 열리면 도달 가능하다.
+  # 인증은 Access Key Id/Secret Key Basic (docker login과 같은 자격 증명).
   registry:
     endpoint: ${NCR_ENDPOINT:}
     access-key: ${NCR_ACCESS_KEY:}
     secret-key: ${NCR_SECRET_KEY:}
     cli-path: ${NCR_CLI_PATH:/usr/bin/skopeo}
 
-  # Phase 2 — FN-04-5 Microsoft Graph / SharePoint. SP_DRIVE_ID를 비워두면 사이트의
-  # 기본 문서 라이브러리를 조회해 대신 사용한다.
+  # Microsoft Graph / SharePoint. SP_DRIVE_ID를 비우면 사이트의 기본 문서 라이브러리를 조회해 쓴다.
   sharepoint:
     tenant-id: ${GRAPH_TENANT_ID:}
     client-id: ${GRAPH_CLIENT_ID:}
@@ -62,36 +60,34 @@ deployhub:
     drive-id: ${SP_DRIVE_ID:}
     root-path: ${SP_ROOT_PATH:/Deploy/Packages}
 
-  # Phase 2 — 이후 모든 외부 호출(NCR·Graph)이 공유하는 재시도 정책 (0.6절).
+  # 모든 외부 호출(NCR·Graph)이 공유하는 재시도 정책.
   retry:
     max-retries: ${MAX_RETRY:3}
     backoff: ${RETRY_BACKOFF:5,15}
 
-  # Phase 3 — Job 오케스트레이션 (0.6절 JOB_CONCURRENCY). 확정 시점 디스크 여유 공간
-  # 경고 기준은 기본 50GiB — 실제 필요 용량은 Phase 4가 매니페스트 크기로 계산한다.
+  # Job 오케스트레이션. min-free-disk-bytes는 확정 시점의 경고 기준(기본 50GiB)일 뿐이고,
+  # 실제 필요 용량은 다운로드 단계가 매니페스트 크기로 따로 판정한다.
   job:
     concurrency: ${JOB_CONCURRENCY:3}
     min-free-disk-bytes: ${MIN_FREE_DISK_BYTES:53687091200}
 
-  # 매니페스트 조회 동시 요청 상한. manifestExecutor 풀 크기와 검증 배치 크기가 이 값
-  # 하나를 공유한다. NCR 전체가 나눠 쓰는 전역 상한이라 env var로 노출하지 않는다.
+  # 매니페스트 조회 동시 요청 상한. manifestExecutor 풀 크기와 검증 배치 크기가 이 값 하나를
+  # 공유한다(NCR 전체가 나눠 쓰는 전역 상한). 튜닝 대상이 아니라 placeholder를 두지 않았을 뿐,
+  # relaxed binding으로 DEPLOYHUB_MANIFEST_CONCURRENCY 덮어쓰기는 여전히 가능하다.
   manifest:
     concurrency: 5
 
-  # Phase 4 — FN-06-1 다운로드. downloadExecutor 풀 크기는 JOB_CONCURRENCY ×
-  # download.concurrency (0.6절 "Job 3건 × 아이템 3건 = skopeo 최대 9개 동시" 근거).
+  # 다운로드. downloadExecutor 풀 크기가 JOB_CONCURRENCY × download.concurrency다.
   download:
     concurrency: ${DOWNLOAD_CONCURRENCY:3}
     skopeo-timeout: ${SKOPEO_TIMEOUT:1800}
 
-  # Phase 5 — FN-09 업로드. 320 KiB(327680)의 배수여야 한다 — 아니면 기동이 실패한다
-  # (E-1108, StartupChecks).
+  # 업로드. 320 KiB(327680)의 배수여야 한다 — 아니면 UploadChunkSizeValidator가 기동을 막는다.
   upload:
     chunk-size: ${UPLOAD_CHUNK_SIZE:10485760}
 
-  # Phase 6 — FN-11 보존·정리 배치 (0.6절). days/count는 SharePoint 폴더,
-  # local-cleanup-delay-hours는 중계 서버 작업 디렉터리에 적용된다. cron은 0.6절 설정값
-  # 표에 없어 env var로 노출하지 않는다 — 바꿀 일이 생기면 그때 꺼낸다.
+  # 보존·정리 배치. days/count는 SharePoint 폴더에, local-cleanup-delay-hours는
+  # 중계 서버 작업 디렉터리에 적용된다.
   retention:
     days: ${RETENTION_DAYS:90}
     count: ${RETENTION_COUNT:10}

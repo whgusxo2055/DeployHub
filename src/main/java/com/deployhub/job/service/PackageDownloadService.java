@@ -183,7 +183,7 @@ public class PackageDownloadService {
             attempt++;
             item.incrementRetryCount();
             packageItemRepository.save(item);
-            RetryExecutor.sleepUninterruptibly(retryProperties.backoffFor(attempt));
+            RetryExecutor.sleepOrThrowOnInterrupt(retryProperties.backoffFor(attempt));
         }
     }
 
@@ -224,20 +224,8 @@ public class PackageDownloadService {
         return true;
     }
 
-    /**
-     * {@code dbMessage}에 서버 경로·호스트 같은 인프라 정보를 넣지 말 것 — 무인증 조회 API가
-     * 이 값을 그대로 응답에 싣는다. 상세(stderr 등)는 {@code detail}로 받아 로그에만 남긴다.
-     */
     private boolean failItem(PackageItem item, String dbMessage, String detail) {
-        log.warn(
-                "항목 실패: versionName={}, imageTag={}, reason={}, detail={}",
-                item.getVersionName(),
-                item.getImageTag(),
-                dbMessage,
-                detail);
-        item.markFailed(dbMessage);
-        packageItemRepository.save(item);
-        return false;
+        return PackageItemFailure.fail(packageItemRepository, item, dbMessage, detail);
     }
 
     /** 재시도 재개 시의 즉석 조회와 다운로드 직후 digest 재확인이 함께 쓴다. */

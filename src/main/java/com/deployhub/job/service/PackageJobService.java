@@ -128,33 +128,18 @@ public class PackageJobService {
                 request.force(),
                 targetTags);
 
-        List<PackageItem> items = packageItemRepository.findByVersionNameOrderByImageTagAsc(versionName);
-        return PackageJobDetailResponse.builder()
-                .job(PackageJobResponse.of(job, items))
-                .items(items.stream().map(PackageItemResponse::from).toList())
-                .build();
+        return toDetail(job, versionName);
     }
 
     public PackageJobDetailResponse getDetail(String versionName) {
-        PackageJob job = packageJobRepository
-                .findById(versionName)
-                .orElseThrow(() -> new ApiException(
-                        ErrorCode.PACKAGE_JOB_NOT_FOUND, "메인버전 '%s'의 패키지 Job이 없습니다.".formatted(versionName)));
-        List<PackageItem> items = packageItemRepository.findByVersionNameOrderByImageTagAsc(versionName);
-
-        return PackageJobDetailResponse.builder()
-                .job(PackageJobResponse.of(job, items))
-                .items(items.stream().map(PackageItemResponse::from).toList())
-                .build();
+        PackageJob job = packageJobRepository.getOrThrow(versionName);
+        return toDetail(job, versionName);
     }
 
     /** {@link JobOrchestrator}가 단계 전후로 호출하는 상태 전이 전용 메서드. */
     @Transactional
     public void changeStatus(String versionName, JobStatus status) {
-        PackageJob job = packageJobRepository
-                .findById(versionName)
-                .orElseThrow(() -> new ApiException(
-                        ErrorCode.PACKAGE_JOB_NOT_FOUND, "메인버전 '%s'의 패키지 Job이 없습니다.".formatted(versionName)));
+        PackageJob job = packageJobRepository.getOrThrow(versionName);
         job.changeStatus(status);
     }
 
@@ -164,10 +149,7 @@ public class PackageJobService {
      */
     @Transactional
     public void applyFolder(String versionName, String spFolderId, String spFolderUrl) {
-        PackageJob job = packageJobRepository
-                .findById(versionName)
-                .orElseThrow(() -> new ApiException(
-                        ErrorCode.PACKAGE_JOB_NOT_FOUND, "메인버전 '%s'의 패키지 Job이 없습니다.".formatted(versionName)));
+        PackageJob job = packageJobRepository.getOrThrow(versionName);
         job.applyFolder(spFolderId, spFolderUrl);
     }
 
@@ -180,10 +162,7 @@ public class PackageJobService {
     public PackageJobDetailResponse retry(String versionName, PackageItemRetryRequest request) {
         // 락 없는 findById를 쓰면 동시 재시도 두 건이 모두 FAILED를 보고 통과해
         // 같은 tarPath에 두 워커가 동시에 쓰게 된다.
-        PackageJob job = packageJobRepository
-                .findByVersionName(versionName)
-                .orElseThrow(() -> new ApiException(
-                        ErrorCode.PACKAGE_JOB_NOT_FOUND, "메인버전 '%s'의 패키지 Job이 없습니다.".formatted(versionName)));
+        PackageJob job = packageJobRepository.lockOrThrow(versionName);
         if (job.getStatus() != JobStatus.FAILED) {
             throw new ApiException(ErrorCode.RETRY_REJECTED_JOB_NOT_FAILED);
         }
@@ -205,6 +184,10 @@ public class PackageJobService {
         packageItemRepository.saveAll(targets);
         job.changeStatus(JobStatus.DOWNLOADING);
 
+        return toDetail(job, versionName);
+    }
+
+    private PackageJobDetailResponse toDetail(PackageJob job, String versionName) {
         List<PackageItem> items = packageItemRepository.findByVersionNameOrderByImageTagAsc(versionName);
         return PackageJobDetailResponse.builder()
                 .job(PackageJobResponse.of(job, items))

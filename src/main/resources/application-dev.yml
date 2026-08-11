@@ -11,15 +11,12 @@
 # 주의: 이 프로필로 뜬 인스턴스는 /api/health/*, 실제 패키징(Job) 관련 기능이 전부 실패한다
 # (더미 값이라 진짜 NCR/Graph에 붙지 않음). 운영 배포에는 쓰지 말 것.
 #
-# registry/sharepoint 값은 하드코딩이 아니라 env var 기본값 패턴(${NCR_ENDPOINT:placeholder})이다
-# — NCP/Graph 실 자격증명이 준비되면 별도 코드 변경 없이 그 env var만 채워서 dev 프로필로도
-# 실제 연동 테스트를 돌릴 수 있게 하기 위함이다 (Phase 4 계획 논의 참고). 값을 안 채우면
-# 지금처럼 placeholder로 동작한다.
+# registry/sharepoint는 하드코딩이 아니라 env var 기본값 패턴(${NCR_ENDPOINT:placeholder})이다 —
+# 실 자격증명이 준비되면 코드 변경 없이 그 env var만 채워 dev 프로필로도 실제 연동을 시험할 수 있다.
 deployhub:
   startup-checks:
     enabled: false
-  # 로컬/테스트 실행에는 /data/deployhub/jobs가 없다 — 프로젝트 빌드 디렉터리 아래로
-  # 돌려서 디스크 여유 공간 확인(Phase 3)이 조용히 동작하게 한다.
+  # 로컬/테스트에는 /data/deployhub/jobs가 없다 — 빌드 디렉터리 아래로 돌려 디스크 확인이 통과하게 한다.
   work-dir: ./build/tmp/deployhub-jobs
   registry:
     endpoint: ${NCR_ENDPOINT:placeholder.invalid}

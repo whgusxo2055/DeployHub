@@ -42,10 +42,7 @@ public class PackageFileService {
      * 호출측이 폴링 엔드포인트를 한 번 더 부르지 않아도 되게 한다.
      */
     public PackageFilesResponse listFiles(String versionName) {
-        PackageJob job = packageJobRepository
-                .findById(versionName)
-                .orElseThrow(() -> new ApiException(
-                        ErrorCode.PACKAGE_JOB_NOT_FOUND, "메인버전 '%s'의 패키지 Job이 없습니다.".formatted(versionName)));
+        PackageJob job = packageJobRepository.getOrThrow(versionName);
         List<PackageItem> items = packageItemRepository.findByVersionNameOrderByImageTagAsc(versionName);
 
         if (job.getStatus() != JobStatus.DONE) {

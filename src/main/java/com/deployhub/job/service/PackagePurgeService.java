@@ -59,7 +59,7 @@ public class PackagePurgeService {
      */
     @Transactional
     public boolean purgeLocal(String versionName, String trigger, Instant expectedFinishedAt) {
-        PackageJob job = lockJob(versionName);
+        PackageJob job = packageJobRepository.lockOrThrow(versionName);
         if (job.getStatus() != JobStatus.DONE) {
             throw rerunDetected(versionName, "status=" + job.getStatus());
         }
@@ -76,7 +76,7 @@ public class PackagePurgeService {
      */
     @Transactional
     public PurgeResult purge(String versionName, String trigger, Instant expectedFinishedAt) {
-        PackageJob job = lockJob(versionName);
+        PackageJob job = packageJobRepository.lockOrThrow(versionName);
         if (!TERMINAL.contains(job.getStatus())) {
             throw new ApiException(
                     ErrorCode.PACKAGE_CLEANUP_BLOCKED,
@@ -123,17 +123,6 @@ public class PackagePurgeService {
             throw rerunDetected(
                     job.getVersionName(), "finishedAt %s -> %s".formatted(expectedFinishedAt, job.getFinishedAt()));
         }
-    }
-
-    /**
-     * 락 없이 {@code findById}로 먼저 조회하지 말 것 — Hibernate가 1차 캐시의 stale 인스턴스를
-     * 돌려줘 락이 무력화된다.
-     */
-    private PackageJob lockJob(String versionName) {
-        return packageJobRepository
-                .findByVersionName(versionName)
-                .orElseThrow(() -> new ApiException(
-                        ErrorCode.PACKAGE_JOB_NOT_FOUND, "메인버전 '%s'의 패키지 Job이 없습니다.".formatted(versionName)));
     }
 
     private boolean deleteLocalDir(String versionName, String trigger) {
