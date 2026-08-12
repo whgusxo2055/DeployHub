@@ -102,7 +102,27 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
     }
 
     @Test
-    void 직전_메인버전과_전건_동일하면_E_0303으로_거부된다() {
+    void 미변경_컴포넌트만_명시해도_부분_패키징된다() {
+        registerMainVersion("2026.10.41");
+        registerAndSubmitSubVersion("2026.10.41", "pips", "1.0.0", null);
+
+        registerMainVersion("2026.10.42");
+        registerAndSubmitSubVersion("2026.10.42", "pips", "1.0.0", null); // 직전과 동일 → 미변경
+        registerAndSubmitSubVersion("2026.10.42", "api", "2.0.0", null); // 신규 → 변경
+
+        // 선택 범위는 "변경분"이 아니라 "메인버전의 전체 컴포넌트"다 — 기본값에 없는 미변경분만
+        // 골라도 통과해야 한다. 변경분(api:2.0.0)이 함께 딸려 들어가서도 안 된다.
+        ResponseEntity<PackageJobDetailResponse> created =
+                createPackageJob("2026.10.42", List.of("pips:1.0.0"), "tester", false);
+
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(created.getBody().items())
+                .extracting(PackageItemResponse::imageTag)
+                .containsExactly("pips:1.0.0");
+    }
+
+    @Test
+    void 직전_메인버전과_전건_동일하면_E_0303으로_거부되지만_명시_선택은_허용된다() {
         registerMainVersion("2026.10.11");
         registerAndSubmitSubVersion("2026.10.11", "pips", "1.0.0", null);
 
@@ -113,6 +133,16 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).contains("E-0303");
+
+        // 거부 기준은 "변경분 0건"이 아니라 "선택 0건"이다 — 변경분이 하나도 없어도
+        // 호출측이 직접 지정하면 반입할 수 있어야 한다.
+        ResponseEntity<PackageJobDetailResponse> explicit =
+                createPackageJob("2026.10.12", List.of("pips:1.0.0"), "tester", false);
+
+        assertThat(explicit.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(explicit.getBody().items())
+                .extracting(PackageItemResponse::imageTag)
+                .containsExactly("pips:1.0.0");
     }
 
     @Test

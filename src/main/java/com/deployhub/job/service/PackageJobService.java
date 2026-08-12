@@ -76,7 +76,11 @@ public class PackageJobService {
         this.minFreeDiskBytes = minFreeDiskBytes;
     }
 
-    /** 매니페스트 확정 요청의 기본값 후보. 없는 메인버전이면 404. */
+    /**
+     * 매니페스트 확정 요청의 기본 선택값이지 선택 가능 범위가 아니다 — 선택 범위는 메인버전의
+     * 전체 컴포넌트다(미변경분 포함). 전체 목록은 {@code GET /api/main-versions/{versionName}}이
+     * {@code changed} 플래그와 함께 준다. 없는 메인버전이면 404.
+     */
     public List<String> changedComponents(String versionName) {
         assertMainVersionExists(versionName);
         return versionComparisonService.changedImageTags(versionName);
@@ -100,8 +104,7 @@ public class PackageJobService {
                 (request.imageTags() == null || request.imageTags().isEmpty()) ? changedTags : request.imageTags();
         // 기준은 "선택 0건"이다 — 기본값(변경분)이 비어도 호출측이 imageTags를 명시하면 거부하지 않는다.
         if (targetTags.isEmpty()) {
-            throw new ApiException(
-                    ErrorCode.NO_PACKAGING_TARGET, "패키징할 대상이 없습니다 (직전 메인버전 대비 변경된 컴포넌트가 없습니다).");
+            throw new ApiException(ErrorCode.NO_PACKAGING_TARGET);
         }
         assertTargetTagsValid(versionName, targetTags);
 

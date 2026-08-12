@@ -45,7 +45,7 @@ public class PackageJobController {
     private final PackageFileService packageFileService;
     private final PackageCleanupService packageCleanupService;
 
-    @Operation(summary = "직전 메인버전 대비 변경된 컴포넌트 조회 (FN-03)")
+    @Operation(summary = "패키징 기본 선택값 조회 — 직전 메인버전 대비 변경된 컴포넌트 (FN-03)")
     @ApiResponse(responseCode = "404", description = "E-0101: 메인버전 없음")
     @GetMapping("/api/main-versions/{versionName}/changed-components")
     public List<String> getChangedComponents(@PathVariable String versionName) {
