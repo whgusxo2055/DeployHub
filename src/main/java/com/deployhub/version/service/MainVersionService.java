@@ -163,7 +163,6 @@ public class MainVersionService {
                 .note(subVersion.getNote())
                 .sortOrder(subVersion.getSortOrder())
                 .submitStatus(subVersion.getSubmitStatus().name())
-                .submittedBy(subVersion.getSubmittedBy())
                 .submittedAt(subVersion.getSubmittedAt())
                 .changed(subVersionChanged)
                 .components(componentResponses)

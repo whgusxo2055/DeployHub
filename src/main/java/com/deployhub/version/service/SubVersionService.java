@@ -110,7 +110,7 @@ public class SubVersionService {
         SubVersion subVersion = subVersionRepository
                 .findById(subVersionId)
                 .orElseThrow(() -> new ApiException(ErrorCode.SUB_VERSION_NOT_FOUND));
-        subVersion.changeSubmitStatus(request.status(), request.submittedBy());
+        subVersion.changeSubmitStatus(request.status());
     }
 
     /**

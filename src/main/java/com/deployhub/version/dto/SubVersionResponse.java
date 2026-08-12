@@ -13,7 +13,6 @@ public record SubVersionResponse(
         String note,
         Integer sortOrder,
         String submitStatus,
-        String submittedBy,
         Instant submittedAt,
         boolean changed,
         List<ComponentResponse> components) {}

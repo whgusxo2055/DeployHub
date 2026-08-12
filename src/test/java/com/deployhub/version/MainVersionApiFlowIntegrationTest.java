@@ -115,7 +115,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         ResponseEntity<Void> statusResponse = restTemplate.exchange(
                 "/api/sub-versions/{id}/submit-status",
                 HttpMethod.PATCH,
-                new HttpEntity<>(new SubmitStatusChangeRequest(SubmitStatus.UPDATED, "tester")),
+                new HttpEntity<>(new SubmitStatusChangeRequest(SubmitStatus.UPDATED)),
                 Void.class,
                 savedSubVersion.id());
         assertThat(statusResponse.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);

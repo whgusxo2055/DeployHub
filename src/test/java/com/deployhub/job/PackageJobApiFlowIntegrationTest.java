@@ -327,7 +327,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         restTemplate.exchange(
                 "/api/sub-versions/{id}/submit-status",
                 HttpMethod.PATCH,
-                new HttpEntity<>(new SubmitStatusChangeRequest(SubmitStatus.UPDATED, "tester")),
+                new HttpEntity<>(new SubmitStatusChangeRequest(SubmitStatus.UPDATED)),
                 Void.class,
                 id);
     }

@@ -45,9 +45,6 @@ public class SubVersion {
     @Column(name = "submit_status", length = 20, nullable = false)
     private SubmitStatus submitStatus = SubmitStatus.PENDING;
 
-    @Column(name = "submitted_by", length = 100)
-    private String submittedBy;
-
     @Column(name = "submitted_at")
     private Instant submittedAt;
 
@@ -60,13 +57,11 @@ public class SubVersion {
         this.sortOrder = sortOrder;
         // 등록·수정하면 제출 상태는 PENDING으로 되돌아간다.
         this.submitStatus = SubmitStatus.PENDING;
-        this.submittedBy = null;
         this.submittedAt = null;
     }
 
-    public void changeSubmitStatus(SubmitStatus status, String submittedBy) {
+    public void changeSubmitStatus(SubmitStatus status) {
         this.submitStatus = status;
-        this.submittedBy = submittedBy;
         this.submittedAt = Instant.now();
     }
 }
