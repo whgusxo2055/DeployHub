@@ -118,11 +118,12 @@ public class GraphApiClient {
         }
     }
 
+    /** 위임 인증이라 사이트가 아니라 로그인한 계정의 드라이브를 본다. */
     public void healthCheck() {
-        get("/sites/%s/drive/root".formatted(properties.siteId()));
+        get("/me/drive/root");
     }
 
-    /** {@code SP_DRIVE_ID}가 없으면 사이트의 기본 문서 라이브러리를 조회해 메모리에 캐시한다. */
+    /** {@code SP_DRIVE_ID}가 없으면 로그인한 계정의 기본 드라이브를 조회해 메모리에 캐시한다. */
     public String resolveDriveId() {
         if (properties.driveId() != null && !properties.driveId().isBlank()) {
             return properties.driveId();
@@ -134,8 +135,7 @@ public class GraphApiClient {
         // ponytail: 락 안에서 네트워크 호출을 한다 — 드라이브 조회는 프로세스당 한 번이라 감당 가능하다.
         synchronized (this) {
             if (resolvedDriveId == null) {
-                String body = get("/sites/%s/drive".formatted(properties.siteId()));
-                resolvedDriveId = extractId(body);
+                resolvedDriveId = extractId(get("/me/drive"));
             }
             return resolvedDriveId;
         }

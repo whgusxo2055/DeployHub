@@ -51,10 +51,10 @@ class GraphApiClientTest {
     @Test
     void 응답이_401이면_토큰을_무효화하고_새_토큰으로_한번_재시도한다() {
         when(tokenService.getAccessToken()).thenReturn("stale-token", "fresh-token");
-        server.expect(requestTo("https://graph.microsoft.com/v1.0/sites/site-1/drive/root"))
+        server.expect(requestTo("https://graph.microsoft.com/v1.0/me/drive/root"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer stale-token"))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
-        server.expect(requestTo("https://graph.microsoft.com/v1.0/sites/site-1/drive/root"))
+        server.expect(requestTo("https://graph.microsoft.com/v1.0/me/drive/root"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer fresh-token"))
                 .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
 
@@ -67,7 +67,7 @@ class GraphApiClientTest {
     @Test
     void 응답이_403이면_권한_부족으로_즉시_실패한다() {
         when(tokenService.getAccessToken()).thenReturn("token");
-        server.expect(requestTo("https://graph.microsoft.com/v1.0/sites/site-1/drive/root"))
+        server.expect(requestTo("https://graph.microsoft.com/v1.0/me/drive/root"))
                 .andRespond(withStatus(HttpStatus.FORBIDDEN));
 
         assertThatThrownBy(() -> client.healthCheck())
@@ -79,7 +79,7 @@ class GraphApiClientTest {
     @Test
     void driveId_미설정이면_사이트_조회_결과를_한번만_호출해서_캐시한다() {
         when(tokenService.getAccessToken()).thenReturn("token");
-        server.expect(requestTo("https://graph.microsoft.com/v1.0/sites/site-1/drive"))
+        server.expect(requestTo("https://graph.microsoft.com/v1.0/me/drive"))
                 .andRespond(withSuccess("{\"id\":\"drive-abc\"}", MediaType.APPLICATION_JSON));
 
         String first = client.resolveDriveId();

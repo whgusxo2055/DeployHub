@@ -51,7 +51,8 @@ deployhub:
     secret-key: ${NCR_SECRET_KEY:}
     cli-path: ${NCR_CLI_PATH:/usr/bin/skopeo}
 
-  # Microsoft Graph / SharePoint. SP_DRIVE_ID를 비우면 사이트의 기본 문서 라이브러리를 조회해 쓴다.
+  # Microsoft Graph / OneDrive. SP_DRIVE_ID를 비우면 로그인한 계정의 기본 드라이브를 조회해 쓴다.
+  # 위임(delegated) 인증에서는 client-secret·site-id를 쓰지 않는다(app-only 복귀 대비로만 남김).
   sharepoint:
     tenant-id: ${GRAPH_TENANT_ID:}
     client-id: ${GRAPH_CLIENT_ID:}
@@ -59,6 +60,10 @@ deployhub:
     site-id: ${SP_SITE_ID:}
     drive-id: ${SP_DRIVE_ID:}
     root-path: ${SP_ROOT_PATH:/Deploy/Packages}
+    # 위임 인증용 refresh token 보관 파일. 최초 1회 device code 흐름으로 채워 넣는다.
+    # work-dir '밖'에 둔다 — work-dir은 운영자가 반입 tar를 꺼내 가는 곳이라, 그 안에 두면
+    # rsync/tar에 장기 자격증명이 조용히 딸려 나간다. 경로는 생성자에서 normalize된다.
+    refresh-token-file: ${GRAPH_REFRESH_TOKEN_FILE:${deployhub.work-dir}/../.graph-refresh-token}
 
   # 모든 외부 호출(NCR·Graph)이 공유하는 재시도 정책.
   retry:
