@@ -3,6 +3,7 @@ package com.deployhub.version.service;
 import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.common.PageResponse;
+import com.deployhub.job.entity.PackageJob;
 import com.deployhub.job.repository.PackageJobRepository;
 import com.deployhub.version.dto.ComponentResponse;
 import com.deployhub.version.dto.DetailSummaryResponse;
@@ -20,6 +21,7 @@ import com.deployhub.version.entity.SubVersion;
 import com.deployhub.version.repository.ComponentRepository;
 import com.deployhub.version.repository.MainVersionRepository;
 import com.deployhub.version.repository.SubVersionRepository;
+import com.deployhub.version.repository.VersionCount;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -47,11 +49,11 @@ public class MainVersionService {
     public MainVersionInfoResponse create(MainVersionCreateRequest request) {
         if (mainVersionRepository.existsById(request.versionName())) {
             throw new ApiException(
-                    ErrorCode.MAIN_VERSION_ALREADY_EXISTS,
-                    "메인버전 '%s'은(는) 이미 등록되어 있습니다.".formatted(request.versionName()));
+                    ErrorCode.MAIN_VERSION_ALREADY_EXISTS, List.of("versionName=" + request.versionName()));
         }
         MainVersion saved = mainVersionRepository.save(MainVersion.builder()
                 .versionName(request.versionName())
+                .sortKey(MainVersion.sortKeyOf(request.versionName()))
                 .releaseNote(request.releaseNote())
                 .sqlScript(request.sqlScript())
                 .build());
@@ -69,7 +71,7 @@ public class MainVersionService {
         String normalizedKeyword = StringUtils.hasText(keyword) ? keyword : null;
         Page<MainVersion> page = mainVersionRepository.search(normalizedKeyword, pageable);
 
-        List<MainVersionSummaryResponse> items = page.getContent().stream().map(this::toSummary).toList();
+        List<MainVersionSummaryResponse> items = toSummaries(page.getContent());
         return PageResponse.<MainVersionSummaryResponse>builder()
                 .items(items)
                 .totalCount(page.getTotalElements())
@@ -125,22 +127,36 @@ public class MainVersionService {
     private MainVersion getOrThrow(String versionName) {
         return mainVersionRepository
                 .findById(versionName)
-                .orElseThrow(() -> new ApiException(
-                        ErrorCode.MAIN_VERSION_NOT_FOUND, "메인버전 '%s'을(를) 찾을 수 없습니다.".formatted(versionName)));
+                .orElseThrow(() ->
+                        new ApiException(ErrorCode.MAIN_VERSION_NOT_FOUND, List.of("versionName=" + versionName)));
     }
 
-    private MainVersionSummaryResponse toSummary(MainVersion mainVersion) {
-        String versionName = mainVersion.getVersionName();
-        long subVersionCount = subVersionRepository.countByMainVersionName(versionName);
-        long componentCount = componentRepository.countByMainVersionName(versionName);
-        JobSummaryResponse lastJob =
-                packageJobRepository.findById(versionName).map(JobSummaryResponse::from).orElse(null);
-        return MainVersionSummaryResponse.builder()
-                .versionName(versionName)
-                .subVersionCount((int) subVersionCount)
-                .componentCount((int) componentCount)
-                .lastJob(lastJob)
-                .build();
+    /**
+     * 항목마다 카운트 2번 + Job 1번을 치면 page size에 비례해 쿼리가 는다(무인증 API라 size를
+     * 크게 부르는 것도 막을 수 없다) — 집계 2번 + Job 1번으로 고정한다.
+     */
+    private List<MainVersionSummaryResponse> toSummaries(List<MainVersion> mainVersions) {
+        List<String> versionNames = mainVersions.stream().map(MainVersion::getVersionName).toList();
+        if (versionNames.isEmpty()) {
+            return List.of();
+        }
+        Map<String, Long> subVersionCounts = toCountMap(subVersionRepository.countByMainVersionNames(versionNames));
+        Map<String, Long> componentCounts = toCountMap(componentRepository.countByMainVersionNames(versionNames));
+        Map<String, JobSummaryResponse> lastJobs = packageJobRepository.findAllById(versionNames).stream()
+                .collect(Collectors.toMap(PackageJob::getVersionName, JobSummaryResponse::from));
+
+        return mainVersions.stream()
+                .map(mainVersion -> MainVersionSummaryResponse.builder()
+                        .versionName(mainVersion.getVersionName())
+                        .subVersionCount(subVersionCounts.getOrDefault(mainVersion.getVersionName(), 0L).intValue())
+                        .componentCount(componentCounts.getOrDefault(mainVersion.getVersionName(), 0L).intValue())
+                        .lastJob(lastJobs.get(mainVersion.getVersionName()))
+                        .build())
+                .toList();
+    }
+
+    private static Map<String, Long> toCountMap(List<VersionCount> counts) {
+        return counts.stream().collect(Collectors.toMap(VersionCount::versionName, VersionCount::count));
     }
 
     private SubVersionResponse toSubVersionResponse(

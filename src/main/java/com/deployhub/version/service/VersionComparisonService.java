@@ -6,6 +6,7 @@ import com.deployhub.version.entity.SubVersion;
 import com.deployhub.version.repository.ComponentRepository;
 import com.deployhub.version.repository.MainVersionRepository;
 import com.deployhub.version.repository.SubVersionRepository;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -31,9 +32,9 @@ public class VersionComparisonService {
     private final SubVersionRepository subVersionRepository;
     private final ComponentRepository componentRepository;
 
-    /** "직전 메인버전"은 version_name이 대상보다 작은 것 중 최대값이다. */
+    /** "직전 메인버전"은 정렬키가 대상보다 작은 것 중, 서브버전이 있는 최대값이다. */
     public Optional<MainVersion> findPreviousMainVersion(String versionName) {
-        return mainVersionRepository.findFirstByVersionNameLessThanOrderByVersionNameDesc(versionName);
+        return mainVersionRepository.findPrevious(MainVersion.sortKeyOf(versionName));
     }
 
     /** 메인버전에 속한 서브버전·컴포넌트 전체의 변경 여부를 계산한다. subVersionId로 결과를 찾는다. */
@@ -51,13 +52,18 @@ public class VersionComparisonService {
                 .stream()
                 .collect(Collectors.toMap(SubVersion::getCode, Function.identity()));
 
+        // 서브버전마다 조회하면 직전 버전 컴포넌트가 N+1이 된다 — 아래 현재 버전과 같은
+        // findBySubVersionIdIn으로 한 번에 가져온다.
+        Map<Long, String> previousCodeBySubVersionId = previousSubVersionsByCode.values().stream()
+                .collect(Collectors.toMap(SubVersion::getId, SubVersion::getCode));
         Map<String, Set<String>> previousImageTagsByCode = new HashMap<>();
-        for (SubVersion previousSubVersion : previousSubVersionsByCode.values()) {
-            Set<String> tags = componentRepository.findBySubVersionIdOrderBySortOrderAsc(previousSubVersion.getId())
-                    .stream()
-                    .map(Component::getImageTag)
-                    .collect(Collectors.toSet());
-            previousImageTagsByCode.put(previousSubVersion.getCode(), tags);
+        previousSubVersionsByCode.keySet().forEach(code -> previousImageTagsByCode.put(code, new HashSet<>()));
+        if (!previousCodeBySubVersionId.isEmpty()) {
+            for (Component component : componentRepository.findBySubVersionIdIn(previousCodeBySubVersionId.keySet())) {
+                previousImageTagsByCode
+                        .get(previousCodeBySubVersionId.get(component.getSubVersionId()))
+                        .add(component.getImageTag());
+            }
         }
 
         List<Long> currentSubVersionIds = currentSubVersions.stream().map(SubVersion::getId).toList();
