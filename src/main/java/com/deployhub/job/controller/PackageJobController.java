@@ -55,7 +55,8 @@ public class PackageJobController {
     @Operation(summary = "매니페스트 확정 + Job 생성 (FN-03, FN-11 중복방지)")
     @ApiResponse(responseCode = "400", description = "E-0301: 잘못된/중복 image_tag, E-0303: 패키징 대상 없음")
     @ApiResponse(responseCode = "404", description = "E-0101: 메인버전 없음")
-    @ApiResponse(responseCode = "409", description = "E-0302: 중복 Job, E-0304: 디스크 부족, E-0305: PENDING 서브버전 존재, E-1301: 동시 요청 충돌")
+    @ApiResponse(responseCode = "409", description = "E-0302: 중복 Job, E-0304: 디스크 부족" +
+            ", E-0305: PENDING 담당 영역 존재 또는 서브버전 0건, E-1301: 동시 요청 충돌")
     @ApiResponse(responseCode = "503", description = "E-1502: 실행 대기열 포화")
     @PostMapping("/api/main-versions/{versionName}/package-job")
     public ResponseEntity<PackageJobDetailResponse> createPackageJob(
@@ -80,7 +81,7 @@ public class PackageJobController {
     }
 
     @Operation(summary = "실패 항목 수동 재시도 (FN-07)")
-    @ApiResponse(responseCode = "400", description = "E-0303: 재시도 대상 없음")
+    @ApiResponse(responseCode = "400", description = "E-0301: 요청 값 검증 실패, E-0303: 재시도 대상 없음")
     @ApiResponse(responseCode = "404", description = "E-0306: 패키지 Job 없음")
     @ApiResponse(responseCode = "409", description = "E-0702: 재시도 불가 상태, E-0703: 작업 디렉터리 소실")
     @ApiResponse(responseCode = "503", description = "E-1502: 실행 대기열 포화")
@@ -115,8 +116,11 @@ public class PackageJobController {
     }
 
     @Operation(summary = "패키지 수동 정리 (FN-11)", description = "SharePoint 폴더와 로컬 작업 디렉터리를 즉시 삭제한다. Job 이력 행은 남는다.")
+    @ApiResponse(responseCode = "403", description = "E-0452: SharePoint 폴더 삭제 권한 부족")
     @ApiResponse(responseCode = "404", description = "E-0306: 패키지 Job 없음")
     @ApiResponse(responseCode = "409", description = "E-1404: 진행 중인 Job")
+    @ApiResponse(responseCode = "502", description = "E-0451: Graph 토큰 발급 실패")
+    @ApiResponse(responseCode = "503", description = "E-0453: Graph 일시적 응답 불가")
     @DeleteMapping("/api/package-jobs/{versionName}/package")
     public PackageCleanupResponse deletePackage(@PathVariable String versionName) {
         return packageCleanupService.cleanupOne(versionName);

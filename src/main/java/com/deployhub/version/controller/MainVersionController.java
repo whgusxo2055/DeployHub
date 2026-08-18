@@ -50,6 +50,7 @@ public class MainVersionController {
     }
 
     @Operation(summary = "메인버전 수정")
+    @ApiResponse(responseCode = "400", description = "E-0103: 요청 값 검증 실패")
     @ApiResponse(responseCode = "404", description = "E-0101: 메인버전 없음")
     @PutMapping("/api/main-versions/{versionName}")
     public MainVersionInfoResponse update(
@@ -58,9 +59,14 @@ public class MainVersionController {
     }
 
     @Operation(summary = "서브버전 일괄 등록·수정 (컴포넌트 자동 생성)")
-    @ApiResponse(responseCode = "400", description = "E-0205: 요청 값 검증 실패, E-0203: 메인버전 내 image_tag 중복")
+    @ApiResponse(
+            responseCode = "400",
+            description = "E-0205: 요청 값 검증 실패, E-0203: 메인버전 내 image_tag 중복,"
+                    + " E-0206: 레지스트리에 없는 image_tag")
     @ApiResponse(responseCode = "404", description = "E-0101: 메인버전 없음")
-    @ApiResponse(responseCode = "409", description = "E-0204: Job이 있는 메인버전은 수정 불가")
+    @ApiResponse(
+            responseCode = "409",
+            description = "E-0204: Job이 있는 메인버전은 수정 불가, E-0207: 동시 요청 충돌")
     @PutMapping("/api/main-versions/{versionName}/sub-versions")
     public List<SubVersionSavedResponse> upsertSubVersions(
             @PathVariable String versionName, @Valid @RequestBody SubVersionUpsertBatchRequest request) {

@@ -35,6 +35,7 @@ public class SubVersionController {
     }
 
     @Operation(summary = "담당 영역 업데이트 상태 변경 (FN-02-1)")
+    @ApiResponse(responseCode = "400", description = "E-0205: 요청 값 검증 실패")
     @ApiResponse(responseCode = "404", description = "E-0201: 서브버전 없음")
     @PatchMapping("/api/sub-versions/{id}/submit-status")
     public ResponseEntity<Void> changeSubmitStatus(
