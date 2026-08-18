@@ -16,6 +16,7 @@ import com.deployhub.version.dto.MainVersionCreateRequest;
 import com.deployhub.version.dto.MainVersionInfoResponse;
 import com.deployhub.version.dto.SubVersionSavedResponse;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
+import com.deployhub.version.entity.SubmitStatus;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -296,7 +297,7 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
         ResponseEntity<SubVersionSavedResponse> response = restTemplate.exchange(
                 "/api/main-versions/{versionName}/sub-versions/{code}",
                 HttpMethod.PUT,
-                new HttpEntity<>(new SubVersionUpsertRequest(code, version, null, 1, imageTags)),
+                new HttpEntity<>(new SubVersionUpsertRequest(code, version, null, 1, SubmitStatus.PENDING, imageTags)),
                 SubVersionSavedResponse.class,
                 versionName,
                 code);

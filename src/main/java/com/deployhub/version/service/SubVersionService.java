@@ -7,12 +7,14 @@ import com.deployhub.registry.ImageTagChecker;
 import com.deployhub.registry.ImageTagChecker.TagCheck;
 import com.deployhub.version.dto.SubVersionSavedResponse;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
-import com.deployhub.version.dto.SubmitStatusChangeRequest;
+import com.deployhub.version.entity.Component;
 import com.deployhub.version.entity.SubVersion;
+import com.deployhub.version.repository.ComponentRepository;
 import com.deployhub.version.repository.MainVersionRepository;
 import com.deployhub.version.repository.SubVersionRepository;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -28,6 +30,7 @@ public class SubVersionService {
 
     private final MainVersionRepository mainVersionRepository;
     private final SubVersionRepository subVersionRepository;
+    private final ComponentRepository componentRepository;
     private final ManifestLockGuard manifestLockGuard;
     private final SubVersionWriter subVersionWriter;
     private final ImageTagChecker imageTagChecker;
@@ -37,12 +40,14 @@ public class SubVersionService {
     public SubVersionService(
             MainVersionRepository mainVersionRepository,
             SubVersionRepository subVersionRepository,
+            ComponentRepository componentRepository,
             ManifestLockGuard manifestLockGuard,
             SubVersionWriter subVersionWriter,
             ImageTagChecker imageTagChecker,
             @Value("${deployhub.registry.verify-on-register:true}") boolean verifyOnRegister) {
         this.mainVersionRepository = mainVersionRepository;
         this.subVersionRepository = subVersionRepository;
+        this.componentRepository = componentRepository;
         this.manifestLockGuard = manifestLockGuard;
         this.subVersionWriter = subVersionWriter;
         this.imageTagChecker = imageTagChecker;
@@ -57,11 +62,10 @@ public class SubVersionService {
         if (!mainVersionRepository.existsById(versionName)) {
             throw new ApiException(ErrorCode.MAIN_VERSION_NOT_FOUND, List.of("versionName=" + versionName));
         }
-        // 빠른 실패용 — 확정적인 판정은 writer가 락을 잡은 뒤 다시 한다.
-        manifestLockGuard.assertNotLocked(versionName);
-
+        // 확정 잠금은 writer가 판정한다 — 상태만 갱신하는 요청은 확정 후에도 허용해야 해서,
+        // "필드가 실제로 달라졌나"를 락 안에서 알기 전에는 막을 수 없다.
         List<String> tags = resolveImageTags(request);
-        assertImageTagsExistInRegistry(tags);
+        assertImageTagsExistInRegistry(unverifiedTags(versionName, request.code(), tags));
 
         return subVersionWriter.save(versionName, request, tags);
     }
@@ -77,15 +81,6 @@ public class SubVersionService {
         manifestLockGuard.assertNotLocked(subVersion.getMainVersionName());
         // component는 FK ON DELETE CASCADE로 함께 삭제된다.
         subVersionRepository.delete(subVersion);
-    }
-
-    /** 매니페스트 구성을 바꾸지 않으므로 {@link ManifestLockGuard}를 타지 않는다(확정 후에도 상태 갱신은 허용). */
-    @Transactional
-    public void changeSubmitStatus(Long subVersionId, SubmitStatusChangeRequest request) {
-        SubVersion subVersion = subVersionRepository
-                .findById(subVersionId)
-                .orElseThrow(() -> new ApiException(ErrorCode.SUB_VERSION_NOT_FOUND));
-        subVersion.changeSubmitStatus(request.status());
     }
 
     /**
@@ -111,6 +106,21 @@ public class SubVersionService {
             }
         }
         return tags;
+    }
+
+    /**
+     * 이미 이 담당 영역에 저장된 태그는 등록 시점에 확인된 값이라 다시 묻지 않는다 — 안 그러면
+     * "변경 없음" 한 번에 태그 수만큼 NCR 왕복이 붙는다(DEFERRED 8번).
+     */
+    private List<String> unverifiedTags(String versionName, String code, List<String> tags) {
+        Set<String> stored = subVersionRepository
+                .findByMainVersionNameAndCode(versionName, code)
+                .map(subVersion -> componentRepository.findBySubVersionIdOrderBySortOrderAsc(subVersion.getId()))
+                .orElse(List.of())
+                .stream()
+                .map(Component::getImageTag)
+                .collect(Collectors.toSet());
+        return tags.stream().filter(tag -> !stored.contains(tag)).toList();
     }
 
     /**

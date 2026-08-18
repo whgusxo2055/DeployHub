@@ -11,7 +11,6 @@ import com.deployhub.version.dto.PackagingEligibilityResponse;
 import com.deployhub.version.dto.SubVersionResponse;
 import com.deployhub.version.dto.SubVersionSavedResponse;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
-import com.deployhub.version.dto.SubmitStatusChangeRequest;
 import com.deployhub.version.entity.SubmitStatus;
 import com.deployhub.support.MySqlContainerSupport;
 import java.util.List;
@@ -82,7 +81,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
 
         // 2. 서브버전 등록 — 컴포넌트 미지정 → {code}:{version} 1건 자동 생성
         ResponseEntity<SubVersionSavedResponse> saved = putSubVersion(
-                versionName, new SubVersionUpsertRequest("pips", "1.0.22.0300", "변경 사항", 1, null));
+                versionName, new SubVersionUpsertRequest("pips", "1.0.22.0300", "변경 사항", 1, SubmitStatus.PENDING, null));
         assertThat(saved.getStatusCode()).isEqualTo(HttpStatus.OK);
         SubVersionSavedResponse savedSubVersion = saved.getBody();
         assertThat(savedSubVersion.imageTags()).containsExactly("pips:1.0.22.0300");
@@ -105,14 +104,11 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(beforeSubmit.getBody().eligible()).isFalse();
         assertThat(beforeSubmit.getBody().blockingSubVersionCodes()).containsExactly("pips");
 
-        // 5. 담당 영역 상태 변경
-        ResponseEntity<Void> statusResponse = restTemplate.exchange(
-                "/api/sub-versions/{id}/submit-status",
-                HttpMethod.PATCH,
-                new HttpEntity<>(new SubmitStatusChangeRequest(SubmitStatus.UPDATED)),
-                Void.class,
-                savedSubVersion.id());
-        assertThat(statusResponse.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        // 5. 담당 영역 상태 변경 — 필드는 그대로 두고 상태만 선언한다(필드 무변경 경로).
+        ResponseEntity<SubVersionSavedResponse> statusResponse = putSubVersion(
+                versionName,
+                new SubVersionUpsertRequest("pips", "1.0.22.0300", "변경 사항", 1, SubmitStatus.UPDATED, null));
+        assertThat(statusResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
 
         // 6. 패키징 가능 여부 — 즉시 반영되어 가능으로 전환
         ResponseEntity<PackagingEligibilityResponse> afterSubmit = restTemplate.getForEntity(
@@ -128,7 +124,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         //    컴포넌트로 패키징이 통과한다.
         ResponseEntity<SubVersionSavedResponse> retagged = putSubVersion(
                 versionName,
-                new SubVersionUpsertRequest("pips", "1.0.22.0300", "변경 사항", 1, List.of("pips:1.0.23.0100")));
+                new SubVersionUpsertRequest("pips", "1.0.22.0300", "변경 사항", 1, SubmitStatus.PENDING, List.of("pips:1.0.23.0100")));
         assertThat(retagged.getStatusCode()).isEqualTo(HttpStatus.OK);
 
         // 8. 패키징 가능 여부 — 다시 PENDING이라 불가로 돌아온다
@@ -146,12 +142,12 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         restTemplate.postForEntity(
                 "/api/main-versions", new MainVersionCreateRequest(versionName, null, null), MainVersionInfoResponse.class);
 
-        putSubVersion(versionName, new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, List.of("shared:v1")));
+        putSubVersion(versionName, new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.PENDING, List.of("shared:v1")));
 
         ResponseEntity<String> response = restTemplate.exchange(
                 "/api/main-versions/{versionName}/sub-versions/{code}",
                 HttpMethod.PUT,
-                new HttpEntity<>(new SubVersionUpsertRequest("api", "v1.0.0", null, 2, List.of("shared:v1"))),
+                new HttpEntity<>(new SubVersionUpsertRequest("api", "v1.0.0", null, 2, SubmitStatus.PENDING, List.of("shared:v1"))),
                 String.class,
                 versionName,
                 "api");
@@ -165,7 +161,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         String versionName = "2026.09.03";
         restTemplate.postForEntity(
                 "/api/main-versions", new MainVersionCreateRequest(versionName, null, null), MainVersionInfoResponse.class);
-        putSubVersion(versionName, new SubVersionUpsertRequest("pips", "1.0.0", null, 1, null));
+        putSubVersion(versionName, new SubVersionUpsertRequest("pips", "1.0.0", null, 1, SubmitStatus.PENDING, null));
 
         // package-job API로도 Job을 만들 수 있지만, 이 테스트는 ManifestLockGuard
         // (구현계획서 Phase 1-2, E-0204)만 좁게 검증하려는 것이라 DB에 직접 상태를 만든다.
@@ -176,7 +172,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         ResponseEntity<String> response = restTemplate.exchange(
                 "/api/main-versions/{versionName}/sub-versions/{code}",
                 HttpMethod.PUT,
-                new HttpEntity<>(new SubVersionUpsertRequest("pips", "1.0.1", null, 1, null)),
+                new HttpEntity<>(new SubVersionUpsertRequest("pips", "1.0.1", null, 1, SubmitStatus.PENDING, null)),
                 String.class,
                 versionName,
                 "pips");
@@ -194,8 +190,8 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         registerMainVersion("2026.10.01");
         putSubVersion(
                 "2026.10.01",
-                new SubVersionUpsertRequest("cc", "v1.0.0", "직전 배포의 변경 사항", 1, List.of("acme/cc:v1.0.0")));
-        putSubVersion("2026.10.01", new SubVersionUpsertRequest("ocr", "v2.0.0", null, 2, null));
+                new SubVersionUpsertRequest("cc", "v1.0.0", "직전 배포의 변경 사항", 1, SubmitStatus.PENDING, List.of("acme/cc:v1.0.0")));
+        putSubVersion("2026.10.01", new SubVersionUpsertRequest("ocr", "v2.0.0", null, 2, SubmitStatus.PENDING, null));
 
         registerMainVersion("2026.10.02");
 
@@ -231,21 +227,14 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
     void 단건_PUT은_다른_담당_영역을_건드리지_않는다() {
         String versionName = "2026.10.03";
         registerMainVersion(versionName);
-        putSubVersion(versionName, new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, null));
-        SubVersionSavedResponse ocr = putSubVersion(
-                        versionName, new SubVersionUpsertRequest("ocr", "v2.0.0", null, 2, null))
-                .getBody();
+        putSubVersion(versionName, new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.PENDING, null));
+        putSubVersion(versionName, new SubVersionUpsertRequest("ocr", "v2.0.0", null, 2, SubmitStatus.PENDING, null));
 
-        // ocr 담당자가 먼저 "변경 없음"으로 확인을 마친다.
-        restTemplate.exchange(
-                "/api/sub-versions/{id}/submit-status",
-                HttpMethod.PATCH,
-                new HttpEntity<>(new SubmitStatusChangeRequest(SubmitStatus.UNCHANGED)),
-                Void.class,
-                ocr.id());
+        // ocr 담당자가 값은 그대로 두고 "변경 없음"으로 확인을 마친다.
+        putSubVersion(versionName, new SubVersionUpsertRequest("ocr", "v2.0.0", null, 2, SubmitStatus.UNCHANGED, null));
 
         // 그 뒤 cc 담당자가 자기 담당 영역만 올린다.
-        putSubVersion(versionName, new SubVersionUpsertRequest("cc", "v1.1.0", null, 1, null));
+        putSubVersion(versionName, new SubVersionUpsertRequest("cc", "v1.1.0", null, 1, SubmitStatus.PENDING, null));
 
         MainVersionDetailResponse detail = restTemplate
                 .getForEntity("/api/main-versions/{versionName}", MainVersionDetailResponse.class, versionName)
@@ -266,7 +255,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         ResponseEntity<String> response = restTemplate.exchange(
                 "/api/main-versions/{versionName}/sub-versions/{code}",
                 HttpMethod.PUT,
-                new HttpEntity<>(new SubVersionUpsertRequest("ocr", "v1.0.0", null, 1, null)),
+                new HttpEntity<>(new SubVersionUpsertRequest("ocr", "v1.0.0", null, 1, SubmitStatus.PENDING, null)),
                 String.class,
                 versionName,
                 "cc");
@@ -285,7 +274,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         registerMainVersion(versionName);
 
         ResponseEntity<SubVersionSavedResponse> saved = putSubVersion(
-                versionName, new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, List.of("acme/X:v1", "acme/X:V1")));
+                versionName, new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.PENDING, List.of("acme/X:v1", "acme/X:V1")));
 
         assertThat(saved.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(saved.getBody().imageTags()).containsExactly("acme/X:v1", "acme/X:V1");
@@ -305,7 +294,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
     @Test
     void 서브버전이_비워진_메인버전은_직전으로_잡히지_않는다() {
         registerMainVersion("2026.11.01");
-        putSubVersion("2026.11.01", new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, null));
+        putSubVersion("2026.11.01", new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.PENDING, null));
 
         registerMainVersion("2026.11.02"); // cc 복사본을 받는다
         MainVersionDetailResponse mid = restTemplate
@@ -323,6 +312,57 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(detail.subVersions()).extracting(SubVersionResponse::code).containsExactly("cc");
         // 가드를 지우면 빈 11.02가 직전이 되어 복사 0건 + 비교 기준도 비어 전건 changed가 된다.
         assertThat(detail.subVersions()).extracting(SubVersionResponse::changed).containsOnly(false);
+    }
+
+    /** 값이 달라졌는데 "변경 없음"이면 요청자의 화면이 stale하다는 뜻이다 — 조용히 덮지 않고 거절한다. */
+    @Test
+    void 값을_바꾸면서_UNCHANGED로_제출하면_400_E_0208이다() {
+        String versionName = "2026.12.21";
+        registerMainVersion(versionName);
+        putSubVersion(versionName, new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.PENDING, null));
+
+        ResponseEntity<String> response = restTemplate.exchange(
+                "/api/main-versions/{v}/sub-versions/{c}",
+                HttpMethod.PUT,
+                new HttpEntity<>(new SubVersionUpsertRequest("cc", "v1.1.0", null, 1, SubmitStatus.UNCHANGED, null)),
+                String.class,
+                versionName,
+                "cc");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).contains("E-0208");
+        // 거절된 요청은 값을 남기지 않는다.
+        MainVersionDetailResponse detail = restTemplate
+                .getForEntity("/api/main-versions/{v}", MainVersionDetailResponse.class, versionName)
+                .getBody();
+        assertThat(detail.subVersions().get(0).version()).isEqualTo("v1.0.0");
+    }
+
+    /** 확정 후에도 상태 갱신은 허용한다 — PATCH를 없앤 뒤에도 유지돼야 하는 성질이다. */
+    @Test
+    void 확정된_메인버전도_필드가_그대로면_상태만_바꿀_수_있다() {
+        String versionName = "2026.12.22";
+        registerMainVersion(versionName);
+        putSubVersion(versionName, new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.PENDING, null));
+        jdbcTemplate.update(
+                "INSERT INTO package_job (version_name, status, created_by) VALUES (?, 'PENDING', 'tester')",
+                versionName);
+
+        // 필드 무변경 + 상태만 → 통과
+        ResponseEntity<SubVersionSavedResponse> ok = putSubVersion(
+                versionName, new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.UNCHANGED, null));
+        assertThat(ok.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        // 필드 변경 → 매니페스트를 건드리므로 여전히 409
+        ResponseEntity<String> blocked = restTemplate.exchange(
+                "/api/main-versions/{v}/sub-versions/{c}",
+                HttpMethod.PUT,
+                new HttpEntity<>(new SubVersionUpsertRequest("cc", "v1.1.0", null, 1, SubmitStatus.PENDING, null)),
+                String.class,
+                versionName,
+                "cc");
+        assertThat(blocked.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(blocked.getBody()).contains("E-0204");
     }
 
     private void registerMainVersion(String versionName) {

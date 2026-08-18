@@ -26,6 +26,7 @@ public enum ErrorCode {
     SUB_VERSION_VALIDATION_FAILED("E-0205", HttpStatus.BAD_REQUEST, "서브버전 요청 값이 올바르지 않습니다."),
     IMAGE_TAG_NOT_IN_REGISTRY("E-0206", HttpStatus.BAD_REQUEST, "레지스트리에 없는 image_tag가 있습니다."),
     SUB_VERSION_SAVE_CONFLICT("E-0207", HttpStatus.CONFLICT, "동시 요청으로 서브버전 저장이 충돌했습니다. 다시 시도하세요."),
+    SUB_VERSION_STATUS_CONTRADICTION("E-0208", HttpStatus.BAD_REQUEST, "최신 값을 다시 조회하세요."),
 
     // E-03xx 매니페스트 확정 / Job 생성
     INVALID_IMAGE_TAG_SELECTION(

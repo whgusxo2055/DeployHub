@@ -53,27 +53,17 @@ public class SubVersion {
     private Integer sortOrder;
 
     /**
-     * 값이 실제로 달라졌을 때만 제출 상태를 되돌린다. 프론트가 조회한 값을 그대로 왕복시키므로
-     * 안 바뀐 값도 매번 실려 오는데, 무조건 되돌리면 이미 제출한 담당 영역이 전부 PENDING이 되고
-     * {@code submitted_at}이 날아가 패키징이 E-0305로 막힌다.
+     * 값이 실제로 달라졌는지 돌려준다 — 상태 결정은 호출자가 컴포넌트 변경까지 합쳐서 한다.
+     * 여기서 상태를 건드리면 "값도 바꾸고 제출까지" 한 번에 하는 요청을 표현할 수 없다.
      */
-    public void update(String version, String note, Integer sortOrder) {
+    public boolean update(String version, String note, Integer sortOrder) {
         boolean changed = !Objects.equals(this.version, version)
                 || !Objects.equals(this.note, note)
                 || !Objects.equals(this.sortOrder, sortOrder);
         this.version = version;
         this.note = note;
         this.sortOrder = sortOrder;
-        if (changed) {
-            this.submitStatus = SubmitStatus.PENDING;
-            this.submittedAt = null;
-        }
-    }
-
-    /** 컴포넌트 목록이 바뀐 경우에도 같은 규칙을 적용한다(호출자가 판단해 부른다). */
-    public void resetSubmitStatus() {
-        this.submitStatus = SubmitStatus.PENDING;
-        this.submittedAt = null;
+        return changed;
     }
 
     /** PENDING으로 되돌릴 때는 제출 시각을 남기지 않는다 — "제출됨"의 근거가 돼야 한다. */

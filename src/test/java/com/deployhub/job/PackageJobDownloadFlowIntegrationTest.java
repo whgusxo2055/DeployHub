@@ -13,7 +13,6 @@ import com.deployhub.version.dto.MainVersionCreateRequest;
 import com.deployhub.version.dto.MainVersionInfoResponse;
 import com.deployhub.version.dto.SubVersionSavedResponse;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
-import com.deployhub.version.dto.SubmitStatusChangeRequest;
 import com.deployhub.version.entity.SubmitStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -460,18 +459,11 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         ResponseEntity<SubVersionSavedResponse> saved = restTemplate.exchange(
                 "/api/main-versions/{versionName}/sub-versions/{code}",
                 HttpMethod.PUT,
-                new HttpEntity<>(new SubVersionUpsertRequest(code, version, null, 1, imageTags)),
+                new HttpEntity<>(new SubVersionUpsertRequest(code, version, null, 1, SubmitStatus.UPDATED, imageTags)),
                 SubVersionSavedResponse.class,
                 versionName,
                 code);
         assertThat(saved.getStatusCode()).isEqualTo(HttpStatus.OK);
-        Long id = saved.getBody().id();
-        restTemplate.exchange(
-                "/api/sub-versions/{id}/submit-status",
-                HttpMethod.PATCH,
-                new HttpEntity<>(new SubmitStatusChangeRequest(SubmitStatus.UPDATED)),
-                Void.class,
-                id);
     }
 
     private ResponseEntity<PackageJobDetailResponse> createPackageJob(String versionName, List<String> imageTags) {

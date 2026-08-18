@@ -7,6 +7,7 @@ import com.deployhub.version.dto.SubVersionUpsertRequest;
 import com.deployhub.version.entity.Component;
 import com.deployhub.version.entity.MainVersion;
 import com.deployhub.version.entity.SubVersion;
+import com.deployhub.version.entity.SubmitStatus;
 import com.deployhub.version.repository.ComponentRepository;
 import com.deployhub.version.repository.MainVersionRepository;
 import com.deployhub.version.repository.SubVersionRepository;
@@ -41,8 +42,6 @@ public class SubVersionWriter {
                 .map(MainVersion::getVersionName)
                 .orElseThrow(() ->
                         new ApiException(ErrorCode.MAIN_VERSION_NOT_FOUND, List.of("versionName=" + versionName)));
-        // 락 획득 전에 Job이 생겼을 수 있어 여기서 한 번 더 본다(진입 시 검사는 빠른 실패용).
-        manifestLockGuard.assertNotLocked(canonical);
         assertImageTagsUnique(canonical, request.code(), tags);
 
         try {
@@ -55,27 +54,37 @@ public class SubVersionWriter {
     }
 
     private SubVersionSavedResponse upsert(String versionName, SubVersionUpsertRequest request, List<String> tags) {
-        SubVersion subVersion = subVersionRepository
-                .findByMainVersionNameAndCode(versionName, request.code())
-                .map(existing -> {
-                    existing.update(request.version(), request.note(), request.sortOrder());
-                    return existing;
-                })
-                .orElseGet(() -> subVersionRepository.save(SubVersion.builder()
+        SubVersion existing =
+                subVersionRepository.findByMainVersionNameAndCode(versionName, request.code()).orElse(null);
+        boolean isNew = existing == null;
+        SubVersion subVersion = isNew
+                ? subVersionRepository.save(SubVersion.builder()
                         .mainVersionName(versionName)
                         .code(request.code())
                         .version(request.version())
                         .note(request.note())
                         .sortOrder(request.sortOrder())
-                        .build()));
+                        .build())
+                : existing;
 
         List<Component> existingComponents =
                 componentRepository.findBySubVersionIdOrderBySortOrderAsc(subVersion.getId());
-        // 컴포넌트만 바뀐 수정은 SubVersion.update가 "변경 없음"으로 보고 제출 상태를 그대로 둔다 —
-        // 여기서 되돌리지 않으면 제출한 적 없는 컴포넌트로 패키징이 통과한다(순서 변경도 변경이다).
-        if (!existingComponents.stream().map(Component::getImageTag).toList().equals(tags)) {
-            subVersion.resetSubmitStatus();
+        // 순서 변경도 변경이다 — 여기서 놓치면 제출한 적 없는 컴포넌트로 패키징이 통과한다.
+        boolean changed = isNew
+                || subVersion.update(request.version(), request.note(), request.sortOrder())
+                || !existingComponents.stream().map(Component::getImageTag).toList().equals(tags);
+
+        // 값이 달라졌는데 "변경 없음"이면 요청자가 stale한 화면을 보고 있다는 뜻이다.
+        if (changed && request.submitStatus() == SubmitStatus.UNCHANGED) {
+            throw new ApiException(
+                    ErrorCode.SUB_VERSION_STATUS_CONTRADICTION, List.of("code=" + request.code()));
         }
+        // 매니페스트를 실제로 건드릴 때만 확정 잠금을 적용한다 — 상태만 갱신하는 요청은 확정 후에도 허용한다.
+        if (changed) {
+            manifestLockGuard.assertNotLocked(versionName);
+        }
+        subVersion.changeSubmitStatus(request.submitStatus());
+
         if (!existingComponents.isEmpty()) {
             componentRepository.deleteAll(existingComponents);
             // Hibernate는 같은 트랜잭션 내 INSERT를 DELETE보다 먼저 플러시한다 —

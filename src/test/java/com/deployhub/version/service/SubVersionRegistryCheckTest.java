@@ -17,6 +17,7 @@ import com.deployhub.registry.ImageTagChecker.TagCheck;
 import com.deployhub.registry.NcrRegistryClient.ManifestInfo;
 import com.deployhub.version.dto.SubVersionSavedResponse;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
+import com.deployhub.version.entity.SubmitStatus;
 import com.deployhub.version.entity.Component;
 import com.deployhub.version.entity.SubVersion;
 import com.deployhub.version.repository.ComponentRepository;
@@ -43,6 +44,9 @@ class SubVersionRegistryCheckTest {
     private SubVersionRepository subVersionRepository;
 
     @Mock
+    private ComponentRepository componentRepository;
+
+    @Mock
     private ManifestLockGuard manifestLockGuard;
 
     @Mock
@@ -55,6 +59,7 @@ class SubVersionRegistryCheckTest {
         return new SubVersionService(
                 mainVersionRepository,
                 subVersionRepository,
+                componentRepository,
                 manifestLockGuard,
                 subVersionWriter,
                 imageTagChecker,
@@ -62,7 +67,7 @@ class SubVersionRegistryCheckTest {
     }
 
     private static SubVersionUpsertRequest request() {
-        return new SubVersionUpsertRequest("cc", "v1.0.108", null, 0, List.of(TAG));
+        return new SubVersionUpsertRequest("cc", "v1.0.108", null, 0, SubmitStatus.PENDING, List.of(TAG));
     }
 
     /** 이 단언이 수정 전 코드(검증 없음)에서는 실패한다 — 저장이 그대로 성공하기 때문이다. */
@@ -117,7 +122,7 @@ class SubVersionRegistryCheckTest {
         when(mainVersionRepository.existsById(VERSION)).thenReturn(true);
 
         assertThatThrownBy(() -> service(false)
-                        .upsert(VERSION, new SubVersionUpsertRequest("cc", "v1", null, 0, List.of(TAG, TAG))))
+                        .upsert(VERSION, new SubVersionUpsertRequest("cc", "v1", null, 0, SubmitStatus.PENDING, List.of(TAG, TAG))))
                 .isInstanceOf(ApiException.class)
                 .extracting(e -> ((ApiException) e).getErrorCode())
                 .isEqualTo(ErrorCode.SUB_VERSION_VALIDATION_FAILED);

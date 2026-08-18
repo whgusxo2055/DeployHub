@@ -56,7 +56,7 @@ docker compose -f docker-compose.dev.yml up -d
 | `GET /api/main-versions` | 메인버전 목록 (FN-01) |
 | `GET /api/main-versions/{v}` | 메인버전 + 서브버전 조회 (FN-02) |
 | `POST /api/main-versions` · `PUT /api/main-versions/{v}` | 메인버전 등록(직전 담당 영역 전건 복사)·수정 |
-| `PUT /api/main-versions/{v}/sub-versions/{code}` | 서브버전 1건 등록·수정 (FN-02-1) |
+| `PUT /api/main-versions/{v}/sub-versions/{code}` | 서브버전 1건 등록·수정 + 확인 상태 설정 (FN-02-1) |
 | `DELETE /api/sub-versions/{id}` | 서브버전 삭제 |
 | `GET /api/main-versions/{v}/packaging-eligibility` | 패키징 가능 여부 (FN-02-1) |
 | `GET /api/main-versions/{v}/changed-components` | 직전 대비 변경 컴포넌트 (FN-03) |

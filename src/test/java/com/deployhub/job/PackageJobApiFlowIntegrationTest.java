@@ -12,7 +12,6 @@ import com.deployhub.version.dto.MainVersionCreateRequest;
 import com.deployhub.version.dto.MainVersionInfoResponse;
 import com.deployhub.version.dto.SubVersionSavedResponse;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
-import com.deployhub.version.dto.SubmitStatusChangeRequest;
 import com.deployhub.version.entity.SubmitStatus;
 import java.time.Duration;
 import java.time.Instant;
@@ -147,8 +146,8 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
     @Test
     void PENDING_서브버전이_남아있으면_E_0305로_거부된다() {
         registerMainVersion("2026.10.21");
-        // registerAndSubmitSubVersion을 쓰지 않고 submit-status 변경을 생략 → PENDING 유지.
-        putSubVersion("2026.10.21", new SubVersionUpsertRequest("pips", "1.0.0", null, 1, null));
+        // registerAndSubmitSubVersion을 쓰지 않고 PENDING으로 등록해 확인 대기 상태를 만든다.
+        putSubVersion("2026.10.21", new SubVersionUpsertRequest("pips", "1.0.0", null, 1, SubmitStatus.PENDING, null));
 
         ResponseEntity<String> response = createPackageJobRaw("2026.10.21", null, "tester", false);
 
@@ -320,15 +319,8 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
     }
 
     private void registerAndSubmitSubVersion(String versionName, String code, String version, List<String> imageTags) {
-        ResponseEntity<SubVersionSavedResponse> saved =
-                putSubVersion(versionName, new SubVersionUpsertRequest(code, version, null, 1, imageTags));
-        Long id = saved.getBody().id();
-        restTemplate.exchange(
-                "/api/sub-versions/{id}/submit-status",
-                HttpMethod.PATCH,
-                new HttpEntity<>(new SubmitStatusChangeRequest(SubmitStatus.UPDATED)),
-                Void.class,
-                id);
+        // 값 등록과 제출을 한 요청으로 한다 — 상태는 요청 본문이 선언한다.
+        putSubVersion(versionName, new SubVersionUpsertRequest(code, version, null, 1, SubmitStatus.UPDATED, imageTags));
     }
 
     private ResponseEntity<SubVersionSavedResponse> putSubVersion(String versionName, SubVersionUpsertRequest item) {
