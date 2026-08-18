@@ -12,7 +12,8 @@ public interface ComponentRepository extends JpaRepository<Component, ComponentI
 
     List<Component> findBySubVersionIdOrderBySortOrderAsc(Long subVersionId);
 
-    List<Component> findBySubVersionIdIn(Collection<Long> subVersionIds);
+    /** 정렬이 없으면 getDetail이 컴포넌트를 PK 순으로 돌려준다 — image_tag 대조가 _bin이라 대문자가 앞선다. */
+    List<Component> findBySubVersionIdInOrderBySortOrderAsc(Collection<Long> subVersionIds);
 
     /**
      * 메인버전 내 {@code image_tag} 유일성 검증용. 반드시 메인버전 범위로 한정할 것 —

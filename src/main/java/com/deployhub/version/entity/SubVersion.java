@@ -53,8 +53,8 @@ public class SubVersion {
     private Integer sortOrder;
 
     /**
-     * 값이 실제로 달라졌을 때만 제출 상태를 되돌린다. 배치 API 특성상 운영자가 전체 목록을 그대로
-     * 다시 PUT하기 쉬운데, 무조건 되돌리면 이미 제출한 담당 영역이 전부 PENDING이 되고
+     * 값이 실제로 달라졌을 때만 제출 상태를 되돌린다. 프론트가 조회한 값을 그대로 왕복시키므로
+     * 안 바뀐 값도 매번 실려 오는데, 무조건 되돌리면 이미 제출한 담당 영역이 전부 PENDING이 되고
      * {@code submitted_at}이 날아가 패키징이 E-0305로 막힌다.
      */
     public void update(String version, String note, Integer sortOrder) {

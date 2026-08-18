@@ -11,7 +11,6 @@ import com.deployhub.support.MySqlContainerSupport;
 import com.deployhub.version.dto.MainVersionCreateRequest;
 import com.deployhub.version.dto.MainVersionInfoResponse;
 import com.deployhub.version.dto.SubVersionSavedResponse;
-import com.deployhub.version.dto.SubVersionUpsertBatchRequest;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
 import com.deployhub.version.dto.SubmitStatusChangeRequest;
 import com.deployhub.version.entity.SubmitStatus;
@@ -149,7 +148,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
     void PENDING_서브버전이_남아있으면_E_0305로_거부된다() {
         registerMainVersion("2026.10.21");
         // registerAndSubmitSubVersion을 쓰지 않고 submit-status 변경을 생략 → PENDING 유지.
-        putSubVersions("2026.10.21", new SubVersionUpsertRequest("pips", "1.0.0", null, 1, null));
+        putSubVersion("2026.10.21", new SubVersionUpsertRequest("pips", "1.0.0", null, 1, null));
 
         ResponseEntity<String> response = createPackageJobRaw("2026.10.21", null, "tester", false);
 
@@ -321,9 +320,9 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
     }
 
     private void registerAndSubmitSubVersion(String versionName, String code, String version, List<String> imageTags) {
-        ResponseEntity<SubVersionSavedResponse[]> saved =
-                putSubVersions(versionName, new SubVersionUpsertRequest(code, version, null, 1, imageTags));
-        Long id = saved.getBody()[0].id();
+        ResponseEntity<SubVersionSavedResponse> saved =
+                putSubVersion(versionName, new SubVersionUpsertRequest(code, version, null, 1, imageTags));
+        Long id = saved.getBody().id();
         restTemplate.exchange(
                 "/api/sub-versions/{id}/submit-status",
                 HttpMethod.PATCH,
@@ -332,13 +331,14 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
                 id);
     }
 
-    private ResponseEntity<SubVersionSavedResponse[]> putSubVersions(String versionName, SubVersionUpsertRequest item) {
-        ResponseEntity<SubVersionSavedResponse[]> response = restTemplate.exchange(
-                "/api/main-versions/{versionName}/sub-versions",
+    private ResponseEntity<SubVersionSavedResponse> putSubVersion(String versionName, SubVersionUpsertRequest item) {
+        ResponseEntity<SubVersionSavedResponse> response = restTemplate.exchange(
+                "/api/main-versions/{versionName}/sub-versions/{code}",
                 HttpMethod.PUT,
-                new HttpEntity<>(new SubVersionUpsertBatchRequest(List.of(item))),
-                SubVersionSavedResponse[].class,
-                versionName);
+                new HttpEntity<>(item),
+                SubVersionSavedResponse.class,
+                versionName,
+                item.code());
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         return response;
     }

@@ -8,25 +8,19 @@ import com.deployhub.registry.ImageTagChecker.TagCheck;
 import com.deployhub.version.dto.SubVersionSavedResponse;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
 import com.deployhub.version.dto.SubmitStatusChangeRequest;
-import com.deployhub.version.entity.Component;
 import com.deployhub.version.entity.SubVersion;
-import com.deployhub.version.repository.ComponentRepository;
 import com.deployhub.version.repository.MainVersionRepository;
 import com.deployhub.version.repository.SubVersionRepository;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 서브버전 등록·수정. 요청에 포함된 code만 upsert하고 목록에서 빠진 기존 서브버전은 건드리지 않는다 —
- * 삭제는 {@code DELETE /api/sub-versions/{id}}로만 한다.
+ * 서브버전 등록·수정. <b>한 번에 한 담당 영역만</b> 다룬다 — 여러 건을 받으면 화면 전체를 실어 보내는
+ * 구현을 유도해, 안 건드린 담당 영역이 되돌아가며 남의 저장분이 소실된다. 삭제는 id 경로로만 한다.
  */
 @Slf4j
 @Service
@@ -56,37 +50,20 @@ public class SubVersionService {
     }
 
     /**
-     * 저장 자체는 {@link SubVersionWriter}가 트랜잭션 안에서 한다 — 레지스트리 조회가 DB 커넥션을
-     * 붙잡지 않게 순서를 이렇게 나눈다: 형식·중복 검사 → 레지스트리 확인 → 락 + 저장.
+     * 레지스트리 조회가 DB 커넥션을 붙잡지 않게 순서를 나눈다: 형식 검사 → 레지스트리 확인 → 락 + 저장.
+     * 저장 구간은 {@link SubVersionWriter}가 트랜잭션 안에서 맡는다.
      */
-    public List<SubVersionSavedResponse> upsertAll(String versionName, List<SubVersionUpsertRequest> requests) {
+    public SubVersionSavedResponse upsert(String versionName, SubVersionUpsertRequest request) {
         if (!mainVersionRepository.existsById(versionName)) {
             throw new ApiException(ErrorCode.MAIN_VERSION_NOT_FOUND, List.of("versionName=" + versionName));
         }
         // 빠른 실패용 — 확정적인 판정은 writer가 락을 잡은 뒤 다시 한다.
         manifestLockGuard.assertNotLocked(versionName);
 
-        Map<String, List<String>> newTagsByCode = resolveTagsByCode(requests);
-        assertImageTagsExistInRegistry(newTagsByCode);
+        List<String> tags = resolveImageTags(request);
+        assertImageTagsExistInRegistry(tags);
 
-        return subVersionWriter.save(versionName, requests, newTagsByCode);
-    }
-
-    /**
-     * code -> 최종 image_tag 목록. 유일성 검증과 실제 저장이 같은 값을 쓰게 한다.
-     *
-     * <p>같은 배치에 code가 두 번 오면 거절한다 — Map에 담는 구조라 뒤엣것이 앞엣것을 조용히
-     * 덮어쓰는데, 저장 루프는 요청 목록을 그대로 돌아 <b>응답에 남의 태그가 실린다</b>.
-     */
-    private Map<String, List<String>> resolveTagsByCode(List<SubVersionUpsertRequest> requests) {
-        Map<String, List<String>> newTagsByCode = new LinkedHashMap<>();
-        for (SubVersionUpsertRequest request : requests) {
-            if (newTagsByCode.putIfAbsent(request.code(), resolveImageTags(request)) != null) {
-                throw new ApiException(
-                        ErrorCode.SUB_VERSION_VALIDATION_FAILED, List.of("code=" + request.code(), "duplicated"));
-            }
-        }
-        return newTagsByCode;
+        return subVersionWriter.save(versionName, request, tags);
     }
 
     @Transactional
@@ -94,6 +71,9 @@ public class SubVersionService {
         SubVersion subVersion = subVersionRepository
                 .findById(subVersionId)
                 .orElseThrow(() -> new ApiException(ErrorCode.SUB_VERSION_NOT_FOUND));
+        // 확정과 같은 행을 잡는다 — 없으면 assertNotLocked가 검사-행위 사이에 밀려, 확정된
+        // package_item이 이미 삭제된 컴포넌트를 가리킨 채 패키징이 돈다.
+        mainVersionRepository.lockByVersionName(subVersion.getMainVersionName());
         manifestLockGuard.assertNotLocked(subVersion.getMainVersionName());
         // component는 FK ON DELETE CASCADE로 함께 삭제된다.
         subVersionRepository.delete(subVersion);
@@ -109,9 +89,8 @@ public class SubVersionService {
     }
 
     /**
-     * 컴포넌트를 명시하지 않으면 {@code code:version} 1건을 자동 생성한다. 어느 경로든
-     * {@link ImageReference#parse}로 문법을 강제한다 — 이 값이 그대로 NCR REST 경로와 skopeo
-     * 인자로 들어가므로, 자유 문자열이 들어오는 이 지점에서 막아야 뒤 단계로 흘러가지 않는다.
+     * 컴포넌트 미지정 시 {@code code:version} 1건을 자동 생성한다. 이 값이 NCR REST 경로와 skopeo
+     * 인자로 그대로 들어가므로 {@link ImageReference#parse}로 여기서 문법을 강제한다.
      */
     private List<String> resolveImageTags(SubVersionUpsertRequest request) {
         List<String> tags = (request.imageTags() == null || request.imageTags().isEmpty())
@@ -135,25 +114,13 @@ public class SubVersionService {
     }
 
     /**
-     * 레지스트리에 없는 image_tag를 등록 단계에서 막는다(E-0206). 배포 파이프라인이 이미지를 밀어
-     * 올린 뒤에 버전 히스토리를 적는 운영 순서라, 여기서 없다는 건 사실상 오타다 — 패키징까지 가서
-     * E-0501로 드러나는 것보다 등록자에게 즉시 돌려주는 편이 낫다.
-     *
-     * <p><b>404(확실히 없음)에만 막는다</b> — 타임아웃·차단은 "확인 불가"이지 "없음"이 아니라서,
-     * 그걸로 막으면 레지스트리 장애가 등록 불가로 번진다. 그 경우는 패키징 단계에서 다시 걸린다.
-     *
-     * <p>ponytail: 태그 수에 비례해 DB 트랜잭션 안에서 동기로 기다린다(동시 {@code manifest.concurrency}건).
-     * 사람이 하루 몇 번 누르는 등록이라 감수한다 — 커넥션 점유가 문제가 되면 트랜잭션 밖으로 뺄 것.
+     * 레지스트리에 없는 태그를 등록 단계에서 막는다(E-0206). <b>404(확실히 없음)에만</b> 막는다 —
+     * 타임아웃·차단은 "확인 불가"라 그걸로 막으면 레지스트리 장애가 등록 불가로 번진다.
      */
-    private void assertImageTagsExistInRegistry(Map<String, List<String>> newTagsByCode) {
+    private void assertImageTagsExistInRegistry(List<String> tags) {
         if (!verifyOnRegister) {
             return;
         }
-        List<String> tags = newTagsByCode.values().stream()
-                .flatMap(List::stream)
-                .distinct()
-                .sorted()
-                .toList();
         List<TagCheck> checks;
         try {
             checks = imageTagChecker.checkAll(tags);
@@ -171,5 +138,4 @@ public class SubVersionService {
             throw new ApiException(ErrorCode.IMAGE_TAG_NOT_IN_REGISTRY, missing);
         }
     }
-
 }

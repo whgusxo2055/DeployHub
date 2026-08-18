@@ -53,13 +53,13 @@ public class VersionComparisonService {
                 .collect(Collectors.toMap(SubVersion::getCode, Function.identity()));
 
         // 서브버전마다 조회하면 직전 버전 컴포넌트가 N+1이 된다 — 아래 현재 버전과 같은
-        // findBySubVersionIdIn으로 한 번에 가져온다.
+        // findBySubVersionIdInOrderBySortOrderAsc로 한 번에 가져온다.
         Map<Long, String> previousCodeBySubVersionId = previousSubVersionsByCode.values().stream()
                 .collect(Collectors.toMap(SubVersion::getId, SubVersion::getCode));
         Map<String, Set<String>> previousImageTagsByCode = new HashMap<>();
         previousSubVersionsByCode.keySet().forEach(code -> previousImageTagsByCode.put(code, new HashSet<>()));
         if (!previousCodeBySubVersionId.isEmpty()) {
-            for (Component component : componentRepository.findBySubVersionIdIn(previousCodeBySubVersionId.keySet())) {
+            for (Component component : componentRepository.findBySubVersionIdInOrderBySortOrderAsc(previousCodeBySubVersionId.keySet())) {
                 previousImageTagsByCode
                         .get(previousCodeBySubVersionId.get(component.getSubVersionId()))
                         .add(component.getImageTag());
@@ -68,7 +68,7 @@ public class VersionComparisonService {
 
         List<Long> currentSubVersionIds = currentSubVersions.stream().map(SubVersion::getId).toList();
         Map<Long, List<Component>> currentComponentsBySubVersionId = componentRepository
-                .findBySubVersionIdIn(currentSubVersionIds)
+                .findBySubVersionIdInOrderBySortOrderAsc(currentSubVersionIds)
                 .stream()
                 .collect(Collectors.groupingBy(Component::getSubVersionId));
 

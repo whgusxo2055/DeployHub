@@ -33,7 +33,6 @@ class ImageReferenceTest {
                 "acme/x:1?y=1", // 쿼리 인젝션
                 "acme/x:1#frag", // 프래그먼트
                 "acme/x:{tpl}", // Spring URI 템플릿 변수
-                "ACME/X:1", // 대문자(distribution은 소문자만)
                 "acme x:1", // 공백
                 "acme/x:", // 빈 태그
                 ":1", // 빈 저장소
@@ -44,9 +43,9 @@ class ImageReferenceTest {
         assertThatThrownBy(() -> ImageReference.parse(imageTag)).isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** distribution 문법이 허용하는 구분자 — 좁게 잡으면 유효한 저장소명이 등록에서 막힌다. */
+    /** 형식 강제는 레지스트리 조회(E-0206)가 대신한다 — 여기서 좁게 잡으면 유효한 이름이 등록에서 막힌다. */
     @ParameterizedTest
-    @ValueSource(strings = {"foo__bar:1", "a--b:1", "acme/sub-ns/x:1.0", "a.b_c:v1"})
+    @ValueSource(strings = {"foo__bar:1", "a--b:1", "acme/sub-ns/x:1.0", "a.b_c:v1", "ACME/X:1"})
     void distribution_문법의_구분자를_허용한다(String imageTag) {
         assertThat(ImageReference.parse(imageTag).tag()).isNotBlank();
     }

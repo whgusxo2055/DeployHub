@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 서브버전을 자기 id로 다루는 작업(삭제·제출 상태 변경)만 둔다.
- * 메인버전 경로에 종속된 일괄 등록은 {@link MainVersionController}가 맡는다.
+ * 메인버전 경로에 종속된 등록·수정은 {@link MainVersionController}가 맡는다.
  */
 @RestController
 @Tag(name = "버전 및 매니페스트 관리")

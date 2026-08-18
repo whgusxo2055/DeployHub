@@ -12,7 +12,6 @@ import com.deployhub.support.MySqlContainerSupport;
 import com.deployhub.version.dto.MainVersionCreateRequest;
 import com.deployhub.version.dto.MainVersionInfoResponse;
 import com.deployhub.version.dto.SubVersionSavedResponse;
-import com.deployhub.version.dto.SubVersionUpsertBatchRequest;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
 import com.deployhub.version.dto.SubmitStatusChangeRequest;
 import com.deployhub.version.entity.SubmitStatus;
@@ -458,15 +457,15 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
     }
 
     private void registerAndSubmitSubVersion(String versionName, String code, String version, List<String> imageTags) {
-        ResponseEntity<SubVersionSavedResponse[]> saved = restTemplate.exchange(
-                "/api/main-versions/{versionName}/sub-versions",
+        ResponseEntity<SubVersionSavedResponse> saved = restTemplate.exchange(
+                "/api/main-versions/{versionName}/sub-versions/{code}",
                 HttpMethod.PUT,
-                new HttpEntity<>(new SubVersionUpsertBatchRequest(
-                        List.of(new SubVersionUpsertRequest(code, version, null, 1, imageTags)))),
-                SubVersionSavedResponse[].class,
-                versionName);
+                new HttpEntity<>(new SubVersionUpsertRequest(code, version, null, 1, imageTags)),
+                SubVersionSavedResponse.class,
+                versionName,
+                code);
         assertThat(saved.getStatusCode()).isEqualTo(HttpStatus.OK);
-        Long id = saved.getBody()[0].id();
+        Long id = saved.getBody().id();
         restTemplate.exchange(
                 "/api/sub-versions/{id}/submit-status",
                 HttpMethod.PATCH,

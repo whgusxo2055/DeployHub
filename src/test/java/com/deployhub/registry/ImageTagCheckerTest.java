@@ -85,10 +85,10 @@ class ImageTagCheckerTest {
     /** 형식 오류 메시지에 태그 원문이 실리면 무인증 응답으로 그대로 나간다. */
     @Test
     void 형식_오류는_코드가_정한_문구만_남긴다() {
-        TagCheck check = checker().checkAll(List.of("ACME/X:1")).get(0);
+        TagCheck check = checker().checkAll(List.of("acme/../../v2/other:1")).get(0);
 
         assertThat(check.failureCode()).isEqualTo(ItemErrorCode.INVALID_IMAGE_TAG);
-        assertThat(check.failureCode().toErrorMessage()).doesNotContain("ACME/X");
+        assertThat(check.failureCode().toErrorMessage()).doesNotContain("acme/..");
     }
 
     /** PackageValidationService가 결과를 인덱스로 짝짓는다 — 순서가 밀리면 엉뚱한 항목이 실패한다. */

@@ -105,3 +105,95 @@ SharePoint 폴더 비우기가 일어난다. 종전에는 `NO_PACKAGING_TARGET`�
 끝내 더는 retry가 안 되고, 도중 실패하면 항목이 FAILED가 돼 기존 경로로 돌아간다.
 
 **그때 할 일** — 조인다면 이 분기에만 `force=true`를 요구하는 게 가장 싼 가드다.
+
+---
+
+## 6. 같은 담당 영역을 동시에 고치면 나중 요청이 이긴다 (낙관적 락 없음)
+
+**증상** — 한 담당자가 두 탭을 열어 두거나 계정을 공유해 같은 `code`를 동시에 저장하면,
+먼저 저장한 값이 조용히 덮인다. 서버는 409를 주지 않고 둘 다 200으로 끝난다.
+
+**원인** — `SubVersionWriter.save`는 `main_version` 행 락으로 두 요청을 **직렬화**할 뿐,
+"당신이 본 값이 아직 최신인가"는 묻지 않는다. `sub_version`에 `@Version` 컬럼이 없다.
+
+지금은 거의 성립하지 않는다 — 담당 영역이 `UNIQUE(main_version_name, code)`로 1:1이고,
+서브버전 등록·수정 API가 경로에 `code`를 박은 단건(`PUT /api/main-versions/{v}/sub-versions/{code}`)
+하나뿐이라 서로 다른 담당자의 요청이 같은 행을 겨냥할 수 없다. 일괄 등록 API를 없앤 이유가
+이것이다 — 화면 전체를 실어 보내는 구현을 유도해, 자기가 건드리지 않은 담당 영역까지
+요청 시점 값으로 되돌리는 경로였다.
+
+덮여도 조용하지는 않다. 값이 바뀌면 `SubVersion.update`가 `submit_status`를 PENDING으로
+되돌리므로, 그 담당 영역은 다시 확인 대기가 되고 패키징이 막힌다.
+
+**그때 할 일** — `sub_version`에 `row_version` 컬럼(`version`은 모듈 릴리즈 버전이라 이름이
+겹친다)을 추가하고 `@Version`을 붙인다. 요청 DTO에 `rowVersion`을 실어 보내고
+`OptimisticLockingFailureException`을 409로 매핑한다.
+
+**주의** — 이것만으로는 컴포넌트 전용 변경이 안 걸린다. `image_tag` 목록만 바뀌는 수정은
+`component` 테이블 DELETE/INSERT라 `sub_version` 행을 안 건드릴 수 있고(`resetSubmitStatus`가
+이미 PENDING이면 dirty 체크에 안 잡힌다) `row_version`이 안 오른다. 거기까지 막으려면
+`LockModeType.OPTIMISTIC_FORCE_INCREMENT`가 필요하다.
+
+---
+
+## 7. 담당자가 `sortOrder`를 실어 보내야 해서 문서 표기 순서를 되돌릴 수 있다
+
+**증상** — 담당자가 자기 담당 영역을 저장한 뒤 메인버전 상세의 표기 순서가 옛날로 돌아간다.
+`SubVersion.update`가 `sortOrder` 변경도 "변경"으로 보므로 `submit_status`까지 PENDING으로
+되돌아간다.
+
+**원인** — `SubVersionUpsertRequest.sortOrder`가 `@NotNull`이라 단건 PUT에도 반드시 실린다.
+`sortOrder`는 문서 표기 순서라 담당자가 알 바가 아닌데, 그 사이 등록자가 순서를 바꿨으면
+담당자의 stale 값이 이긴다.
+
+현실적으로는 프론트가 조회한 값을 그대로 왕복시키면 드러나지 않는다.
+
+**그때 할 일** — 단건 PUT에서 `sortOrder`를 무시하고 기존 값을 유지한다. 지금은 최초 입력
+경로와 DTO를 공유하고 있어(신규 생성 시엔 `sortOrder`가 필요하다) 분리 비용이 붙는다 —
+`sortOrder`를 nullable로 바꾸고 "null이면 기존 값 유지, 신규면 마지막+1"로 가는 게
+DTO를 쪼개는 것보다 싸다.
+
+---
+
+## 8. 등록 요청 하나가 최악 18~30분 동안 `manifestExecutor`를 점유한다
+
+**증상** — 서브버전 등록·수정(`PUT .../sub-versions/{code}`)이 수십 분 걸리고, 그동안 진행 중인
+Job의 `VALIDATING` 단계가 큐에서 대기한다. 큐(200)가 넘치면 `RejectedExecutionException`이
+`ApiException`이 아니라 500(E-9000)으로 나간다.
+
+**원인** — 등록 시점 레지스트리 확인이 servlet 스레드에서 동기로 돌고 재시도가 붙는다.
+`read-timeout` 10초(JDK 클라이언트에서 요청 전체 데드라인) × attempt당 HTTP 2~3회(Basic → 토큰 →
+Bearer, 토큰 캐시 없음) ≈ 30초/attempt, `RetryExecutor` 총 4회 + backoff(5·15·45초) ≈ 태그 1건
+최악 185초. 태그 30건 / 동시 5 → 배치 6개가 순차로 돈다. `manifestExecutor`는 풀 5 고정이고
+`PackageValidationService`와 공유한다(NCR 전역 상한 목적).
+
+**그때 할 일** — 이 경로는 이미 "확인 불가면 통과" 정책이라 재시도 4회가 필요 없다.
+등록 확인만 재시도 1회로 낮추면 최악이 3분대로 줄고 코드도 줄어든다.
+
+---
+
+## 9. 요청 본문 크기 상한이 없다
+
+**증상** — 무인증 API에 수백 MB짜리 JSON을 보내면 힙에 먼저 올라간다.
+
+**원인** — `application.yml`에 `server.tomcat.max-*`가 없고 필터도 없다. Tomcat `maxPostSize`는
+form-encoded 파라미터에만 적용되어 JSON 본문에는 무관하다. `@Size(max=30)`·`@Size(max=10000)`은
+**역직렬화 후** 검사라 방어가 되지 않는다.
+
+**그때 할 일** — 앞단 프록시의 `client_max_body_size`가 가장 싸다(앱 코드 0줄). 프록시가 없는
+배치라면 `server.tomcat.max-swallow-size`가 아니라 `spring.servlet.multipart` 밖의 별도 필터가 필요하다.
+
+---
+
+## 10. 무인증 호출자가 서버의 NCR 자격증명으로 태그 존재를 열거할 수 있다
+
+**증상** — `PUT .../sub-versions/{code}`에 확실히 없는 태그 하나를 섞어 30건씩 보내면, 저장 전에
+E-0206으로 중단되고 `details`에 없는 태그 목록이 실린다 → 부작용 0인 "이 태그가 NCR에 있는가" oracle.
+요청 1건당 업스트림 최대 ~90회 증폭이기도 하다.
+
+**원인** — 처리 순서가 `existsById` → 락 가드 → 형식 검사 → **레지스트리 조회** → 저장이라,
+저장에 실패해도 조회는 이미 끝난다. 그게 E-0206의 설계 의도(등록자에게 즉시 오타를 돌려준다)다.
+
+**그때 할 일** — 사내망 무인증은 수용된 리스크지만 그 범위는 DeployHub 자체 데이터였고, 여기서는
+서버가 보유한 NCR 자격증명이 임의 호출자에게 대여된다. 조인다면 이 경로에만 호출자별 레이트 리밋을
+걸거나, 확인을 저장 이후 비동기로 미룬다(즉시 피드백은 포기).

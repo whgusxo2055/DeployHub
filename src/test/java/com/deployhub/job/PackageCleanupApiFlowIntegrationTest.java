@@ -15,7 +15,6 @@ import com.deployhub.support.MySqlContainerSupport;
 import com.deployhub.version.dto.MainVersionCreateRequest;
 import com.deployhub.version.dto.MainVersionInfoResponse;
 import com.deployhub.version.dto.SubVersionSavedResponse;
-import com.deployhub.version.dto.SubVersionUpsertBatchRequest;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -294,13 +293,13 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
     }
 
     private void registerSubVersion(String versionName, String code, String version, List<String> imageTags) {
-        ResponseEntity<SubVersionSavedResponse[]> response = restTemplate.exchange(
-                "/api/main-versions/{versionName}/sub-versions",
+        ResponseEntity<SubVersionSavedResponse> response = restTemplate.exchange(
+                "/api/main-versions/{versionName}/sub-versions/{code}",
                 HttpMethod.PUT,
-                new HttpEntity<>(new SubVersionUpsertBatchRequest(
-                        List.of(new SubVersionUpsertRequest(code, version, null, 1, imageTags)))),
-                SubVersionSavedResponse[].class,
-                versionName);
+                new HttpEntity<>(new SubVersionUpsertRequest(code, version, null, 1, imageTags)),
+                SubVersionSavedResponse.class,
+                versionName,
+                code);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
     }
 

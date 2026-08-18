@@ -72,7 +72,7 @@ class SubVersionRegistryCheckTest {
         when(imageTagChecker.checkAll(List.of(TAG)))
                 .thenReturn(List.of(new TagCheck(TAG, null, ItemErrorCode.IMAGE_NOT_FOUND, true)));
 
-        assertThatThrownBy(() -> service(true).upsertAll(VERSION, List.of(request())))
+        assertThatThrownBy(() -> service(true).upsert(VERSION, request()))
                 .isInstanceOf(ApiException.class)
                 .satisfies(e -> {
                     ApiException api = (ApiException) e;
@@ -90,7 +90,7 @@ class SubVersionRegistryCheckTest {
         when(imageTagChecker.checkAll(List.of(TAG)))
                 .thenReturn(List.of(new TagCheck(TAG, null, ItemErrorCode.MANIFEST_LOOKUP_TIMEOUT, false)));
 
-        assertThat(service(true).upsertAll(VERSION, List.of(request()))).hasSize(1);
+        assertThat(service(true).upsert(VERSION, request()).imageTags()).containsExactly(TAG);
         verify(subVersionWriter).save(eq(VERSION), any(), any());
     }
 
@@ -100,33 +100,15 @@ class SubVersionRegistryCheckTest {
         when(imageTagChecker.checkAll(List.of(TAG)))
                 .thenReturn(List.of(new TagCheck(TAG, new ManifestInfo("sha256:abc", 100L), null, false)));
 
-        assertThat(service(true).upsertAll(VERSION, List.of(request())).get(0).imageTags())
-                .containsExactly(TAG);
+        assertThat(service(true).upsert(VERSION, request()).imageTags()).containsExactly(TAG);
     }
 
     @Test
     void 확인이_꺼져_있으면_레지스트리를_아예_부르지_않는다() {
         stubSave();
 
-        assertThat(service(false).upsertAll(VERSION, List.of(request()))).hasSize(1);
+        assertThat(service(false).upsert(VERSION, request()).imageTags()).containsExactly(TAG);
         verifyNoInteractions(imageTagChecker);
-    }
-
-    /** 같은 배치에 code가 두 번 오면 뒤엣것이 앞엣것을 덮어써 응답에 남의 태그가 실렸다. */
-    @Test
-    void 같은_배치에_code가_중복되면_거절한다() {
-        when(mainVersionRepository.existsById(VERSION)).thenReturn(true);
-
-        assertThatThrownBy(() -> service(false)
-                        .upsertAll(
-                                VERSION,
-                                List.of(
-                                        new SubVersionUpsertRequest("cc", "v1", null, 0, List.of("acme/a:1")),
-                                        new SubVersionUpsertRequest("cc", "v2", null, 1, List.of("acme/b:1")))))
-                .isInstanceOf(ApiException.class)
-                .extracting(e -> ((ApiException) e).getErrorCode())
-                .isEqualTo(ErrorCode.SUB_VERSION_VALIDATION_FAILED);
-        verifyNoInteractions(subVersionWriter);
     }
 
     /** 한 서브버전 안의 중복은 유일성 검사를 통과해 DB 1건 / 응답 2건으로 갈렸다. */
@@ -135,7 +117,7 @@ class SubVersionRegistryCheckTest {
         when(mainVersionRepository.existsById(VERSION)).thenReturn(true);
 
         assertThatThrownBy(() -> service(false)
-                        .upsertAll(VERSION, List.of(new SubVersionUpsertRequest("cc", "v1", null, 0, List.of(TAG, TAG)))))
+                        .upsert(VERSION, new SubVersionUpsertRequest("cc", "v1", null, 0, List.of(TAG, TAG))))
                 .isInstanceOf(ApiException.class)
                 .extracting(e -> ((ApiException) e).getErrorCode())
                 .isEqualTo(ErrorCode.SUB_VERSION_VALIDATION_FAILED);
@@ -145,12 +127,12 @@ class SubVersionRegistryCheckTest {
     private void stubSave() {
         when(mainVersionRepository.existsById(VERSION)).thenReturn(true);
         when(subVersionWriter.save(eq(VERSION), any(), any()))
-                .thenReturn(List.of(SubVersionSavedResponse.builder()
+                .thenReturn(SubVersionSavedResponse.builder()
                         .id(1L)
                         .code("cc")
                         .version("v1.0.108")
                         .sortOrder(0)
                         .imageTags(List.of(TAG))
-                        .build()));
+                        .build());
     }
 }

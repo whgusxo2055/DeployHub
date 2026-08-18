@@ -13,11 +13,9 @@ import java.util.regex.Pattern;
  */
 public record ImageReference(String repository, String tag) {
 
-    // 이 값이 NCR REST 경로에 그대로 붙는다 — 막아야 할 것은 공백·'..'·'?'·'#'이지
-    // distribution 문법의 정확한 재현이 아니다. 영숫자로 시작하고 그 뒤로 [a-z0-9._/-]만 허용하면
-    // 경로·쿼리 조작 문자가 전부 걸리고, foo__bar·a--b 같은 유효한 이름도 그대로 통과한다.
-    // '..'만 따로 막는다 — 위 문자 집합으로는 걸리지 않는데 경로를 거슬러 올라간다.
-    private static final Pattern REPOSITORY = Pattern.compile("[a-z0-9][a-z0-9._/-]*");
+    // 막아야 할 것은 공백·'..'·'?'·'#'뿐이다 — 형식 강제는 레지스트리 조회(E-0206)가 대신한다.
+    // 대소문자는 가리지 않는다(distribution은 소문자만 받지만 그걸 여기서 재현할 이유가 없다).
+    private static final Pattern REPOSITORY = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._/-]*");
     private static final Pattern TAG = Pattern.compile("[\\w][\\w.-]{0,127}");
 
     public static ImageReference parse(String imageTag) {

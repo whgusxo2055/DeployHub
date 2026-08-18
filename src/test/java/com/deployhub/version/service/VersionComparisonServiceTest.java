@@ -47,7 +47,7 @@ class VersionComparisonServiceTest {
         when(subVersionRepository.findByMainVersionNameOrderBySortOrderAsc(versionName))
                 .thenReturn(List.of(cc, ocr));
         when(mainVersionRepository.findPrevious(MainVersion.sortKeyOf(versionName))).thenReturn(Optional.empty());
-        when(componentRepository.findBySubVersionIdIn(any()))
+        when(componentRepository.findBySubVersionIdInOrderBySortOrderAsc(any()))
                 .thenReturn(List.of(
                         newComponent(1L, "sb-cc-api:v2.0.25.8612"), newComponent(2L, "ocr:v0.9.15")));
 
