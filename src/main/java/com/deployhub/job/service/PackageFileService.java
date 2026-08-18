@@ -49,7 +49,6 @@ public class PackageFileService {
             PackageJobResponse progress = PackageJobResponse.of(job, items);
             throw new ApiException(
                     ErrorCode.PACKAGE_NOT_READY,
-                    "패키지가 아직 완료되지 않았습니다 (현재 %s).".formatted(job.getStatus()),
                     List.of("status=" + progress.status(), "progress=" + progress.progress() + "%"));
         }
 

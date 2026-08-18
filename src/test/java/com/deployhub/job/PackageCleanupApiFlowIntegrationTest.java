@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.deployhub.common.ApiException;
+import com.deployhub.common.ErrorCode;
 import com.deployhub.job.dto.PackageCleanupResponse;
 import com.deployhub.job.dto.PackageFileResponse;
 import com.deployhub.job.dto.PackageFilesResponse;
@@ -266,7 +267,8 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
 
         assertThatThrownBy(() -> packagePurgeService.purge("2027.07.01", "test", 스냅샷_시점의_finishedAt))
                 .isInstanceOf(ApiException.class)
-                .hasMessageContaining("재실행");
+                .extracting(ex -> ((ApiException) ex).getErrorCode())
+                .isEqualTo(ErrorCode.PACKAGE_CLEANUP_RERUN);
         assertThat(Files.isDirectory(Path.of(workDir, "2027.07.01"))).isTrue();
         assertThat(queryDeletedAt("2027.07.01")).isNull();
 

@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
@@ -79,8 +80,7 @@ public class PackagePurgeService {
         PackageJob job = packageJobRepository.lockOrThrow(versionName);
         if (!TERMINAL.contains(job.getStatus())) {
             throw new ApiException(
-                    ErrorCode.PACKAGE_CLEANUP_BLOCKED,
-                    "진행 중인 Job(%s)의 패키지는 정리할 수 없습니다.".formatted(job.getStatus()));
+                    ErrorCode.PACKAGE_CLEANUP_BLOCKED, List.of("status=" + job.getStatus()));
         }
         assertNotRerun(job, expectedFinishedAt);
 
@@ -114,8 +114,7 @@ public class PackagePurgeService {
      */
     private ApiException rerunDetected(String versionName, String detail) {
         log.info("정리를 건너뜁니다 — 그 사이 재실행됨: versionName={}, {}", versionName, detail);
-        return new ApiException(
-                ErrorCode.PACKAGE_CLEANUP_BLOCKED, "그 사이 재실행되어 정리 대상이 아닙니다(%s).".formatted(detail));
+        return new ApiException(ErrorCode.PACKAGE_CLEANUP_RERUN, List.of(detail));
     }
 
     private void assertNotRerun(PackageJob job, Instant expectedFinishedAt) {
