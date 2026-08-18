@@ -128,6 +128,27 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(afterSubmit.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(afterSubmit.getBody().eligible()).isTrue();
         assertThat(afterSubmit.getBody().blockingSubVersionCodes()).isEmpty();
+
+        // 7. 제출 후 컴포넌트만 교체 — version/note/sortOrder가 그대로라 SubVersion.update는
+        //    "변경 없음"으로 보고 제출 상태를 안 건드린다. 여기서 되돌리지 않으면 제출한 적 없는
+        //    컴포넌트로 패키징이 통과한다.
+        SubVersionUpsertBatchRequest retagRequest = new SubVersionUpsertBatchRequest(
+                List.of(new SubVersionUpsertRequest("pips", "1.0.22.0300", "변경 사항", 1, List.of("pips:1.0.23.0100"))));
+        ResponseEntity<SubVersionSavedResponse[]> retagged = restTemplate.exchange(
+                "/api/main-versions/{versionName}/sub-versions",
+                HttpMethod.PUT,
+                new HttpEntity<>(retagRequest),
+                SubVersionSavedResponse[].class,
+                versionName);
+        assertThat(retagged.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        // 8. 패키징 가능 여부 — 다시 PENDING이라 불가로 돌아온다
+        ResponseEntity<PackagingEligibilityResponse> afterRetag = restTemplate.getForEntity(
+                "/api/main-versions/{versionName}/packaging-eligibility",
+                PackagingEligibilityResponse.class,
+                versionName);
+        assertThat(afterRetag.getBody().eligible()).isFalse();
+        assertThat(afterRetag.getBody().blockingSubVersionCodes()).containsExactly("pips");
     }
 
     @Test

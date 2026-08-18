@@ -81,6 +81,12 @@ public class SubVersionWriter {
 
             List<Component> existingComponents =
                     componentRepository.findBySubVersionIdOrderBySortOrderAsc(subVersion.getId());
+            List<String> tags = newTagsByCode.get(request.code());
+            // 컴포넌트만 바뀐 수정은 SubVersion.update가 "변경 없음"으로 보고 제출 상태를 그대로 둔다 —
+            // 여기서 되돌리지 않으면 제출한 적 없는 컴포넌트로 패키징이 통과한다(순서 변경도 변경이다).
+            if (!existingComponents.stream().map(Component::getImageTag).toList().equals(tags)) {
+                subVersion.resetSubmitStatus();
+            }
             if (!existingComponents.isEmpty()) {
                 componentRepository.deleteAll(existingComponents);
                 // Hibernate는 같은 트랜잭션 내 INSERT를 DELETE보다 먼저 플러시한다 —
@@ -88,7 +94,6 @@ public class SubVersionWriter {
                 componentRepository.flush();
             }
 
-            List<String> tags = newTagsByCode.get(request.code());
             int order = 0;
             for (String tag : tags) {
                 componentRepository.save(Component.builder()
