@@ -9,7 +9,8 @@ public final class RelativePathGuard {
     private RelativePathGuard() {}
 
     public static void requireRelative(String path) {
-        if (!path.startsWith("/") || path.contains("://")) {
+        // "//host/x"는 authority로 파싱돼 baseUrl을 벗어난다 — "/"로 시작한다고 안전한 게 아니다.
+        if (!path.startsWith("/") || path.startsWith("//") || path.contains("://")) {
             throw new IllegalArgumentException("절대 URL은 이 경로 인자로 넘길 수 없습니다: " + path);
         }
     }

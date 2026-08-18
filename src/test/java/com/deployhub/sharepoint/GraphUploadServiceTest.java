@@ -9,9 +9,11 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withException;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
+import com.deployhub.common.ItemErrorCode;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
 import com.deployhub.job.entity.PackageItem;
@@ -20,6 +22,7 @@ import com.deployhub.job.repository.PackageItemRepository;
 import com.deployhub.registry.ImageReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -57,7 +60,9 @@ class GraphUploadServiceTest {
         when(tokenService.getAccessToken()).thenReturn("token");
         RetryExecutor retryExecutor =
                 new RetryExecutor(new RetryProperties(2, List.of(Duration.ofMillis(1))), duration -> {});
-        GraphApiClient graphApiClient = new GraphApiClient(PROPERTIES, tokenService, retryExecutor, new ObjectMapper(), builder);
+        // 청크 전송용 클라이언트에도 같은 builder를 넘겨 MockRestServiceServer 하나가 둘 다 가로채게 한다.
+        GraphApiClient graphApiClient =
+                new GraphApiClient(PROPERTIES, tokenService, retryExecutor, new ObjectMapper(), builder, builder);
         return new GraphUploadService(
                 packageItemRepository, graphApiClient, new RetryProperties(2, List.of(Duration.ofMillis(1))),
                 new ObjectMapper(), workDir.toString(), chunkSize);
@@ -133,6 +138,32 @@ class GraphUploadServiceTest {
         service.uploadAll(VERSION_NAME, FOLDER_ITEM_ID);
 
         assertThat(item.getStatus()).isEqualTo(PackageItemStatus.UPLOADED);
+        server.verify();
+    }
+
+    @Test
+    void 청크_전송이_타임아웃되면_세션을_새로_만들지_않고_같은_청크만_재전송한다() {
+        // 타임아웃(ResourceAccessException)을 청크 루프 밖으로 올리면 바깥 재시도가 새 세션을 만들어
+        // 파일을 처음부터 다시 올린다 — GB 단위 tar에서는 수렴하지 않는다. createUploadSession
+        // expectation을 하나만 두어 세션 재생성이 없음을 고정한다.
+        PackageItem item = downloadedItem();
+        when(packageItemRepository.findByVersionNameOrderByImageTagAsc(VERSION_NAME)).thenReturn(List.of(item));
+        GraphUploadService service = newService(100); // 25바이트 전체가 청크 1개
+
+        server.expect(requestTo("https://graph.microsoft.com/v1.0/drives/drive-1/items/%s:/%s:/createUploadSession"
+                        .formatted(FOLDER_ITEM_ID, fileName)))
+                .andRespond(withSuccess("{\"uploadUrl\":\"https://upload.example/session-timeout\"}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://upload.example/session-timeout"))
+                .andExpect(header(HttpHeaders.CONTENT_RANGE, "bytes 0-24/25"))
+                .andRespond(withException(new SocketTimeoutException("read timed out")));
+        server.expect(requestTo("https://upload.example/session-timeout"))
+                .andExpect(header(HttpHeaders.CONTENT_RANGE, "bytes 0-24/25"))
+                .andRespond(withStatus(HttpStatus.CREATED).body("{\"webUrl\":\"https://sp/after-timeout.tar\"}"));
+
+        service.uploadAll(VERSION_NAME, FOLDER_ITEM_ID);
+
+        assertThat(item.getStatus()).isEqualTo(PackageItemStatus.UPLOADED);
+        assertThat(item.getFileUrl()).isEqualTo("https://sp/after-timeout.tar");
         server.verify();
     }
 
@@ -241,7 +272,10 @@ class GraphUploadServiceTest {
                 .isInstanceOf(IllegalStateException.class);
 
         assertThat(item.getStatus()).isEqualTo(PackageItemStatus.FAILED);
-        assertThat(item.getErrorMessage()).doesNotContain("LEAKED_SESSION_TOKEN").contains("status=400");
+        // 상태 코드는 이제 error_message가 아니라 로그(detail)로 간다 — DB 문구는 ItemErrorCode가 정한다.
+        assertThat(item.getErrorMessage())
+                .doesNotContain("LEAKED_SESSION_TOKEN")
+                .isEqualTo(ItemErrorCode.UPLOAD_FAILED.toErrorMessage());
         server.verify();
     }
 

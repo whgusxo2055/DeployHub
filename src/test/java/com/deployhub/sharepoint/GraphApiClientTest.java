@@ -45,7 +45,7 @@ class GraphApiClientTest {
         tokenService = mock(GraphTokenService.class);
         RetryExecutor retryExecutor =
                 new RetryExecutor(new RetryProperties(1, List.of(Duration.ofMillis(1))), duration -> {});
-        client = new GraphApiClient(PROPERTIES, tokenService, retryExecutor, new ObjectMapper(), builder);
+        client = new GraphApiClient(PROPERTIES, tokenService, retryExecutor, new ObjectMapper(), builder, builder);
     }
 
     @Test

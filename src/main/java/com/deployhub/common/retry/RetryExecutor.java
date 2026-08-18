@@ -44,11 +44,11 @@ public class RetryExecutor {
                 int currentAttempt = attempt;
                 Duration wait = ex.retryAfterHint().orElseGet(() -> properties.backoffFor(currentAttempt));
                 log.warn(
-                        "{} 실패 ({}/{}), {}초 후 재시도합니다.",
+                        "{} 실패 ({}/{}), {} 후 재시도합니다.",
                         operationName,
                         attempt,
                         properties.maxRetries(),
-                        wait.toSeconds());
+                        wait);
                 sleeper.accept(wait);
             } catch (RuntimeException ex) {
                 throw ex;

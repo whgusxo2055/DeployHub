@@ -1,9 +1,11 @@
 package com.deployhub.sharepoint;
 
 import com.deployhub.common.ApiException;
+import com.deployhub.common.ItemErrorCode;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
+import com.deployhub.common.retry.RetryableCallException;
 import com.deployhub.job.entity.PackageItem;
 import com.deployhub.job.entity.PackageItemStatus;
 import com.deployhub.job.repository.PackageItemRepository;
@@ -26,7 +28,7 @@ import org.springframework.web.client.RestClientResponseException;
 /**
  * 파일별 순차 업로드. 산출물이 전량 GB 단위 이미지 tar라 업로드 세션 경로만 쓴다(단순 PUT은 다루지 않는다).
  * 세션이 소멸하면 이어받기가 불가능해 바깥 재시도 루프가 {@link #uploadFile}을 처음부터 다시 호출한다 —
- * 범위 불일치(416)만 세션을 유지한 채 이어간다.
+ * 범위 불일치(416)와 청크 전송 타임아웃만 세션을 유지한 채 이어간다.
  */
 @Slf4j
 @Service
@@ -87,7 +89,7 @@ public class GraphUploadService {
         try {
             ref = ImageReference.parse(item.getImageTag());
         } catch (IllegalArgumentException e) {
-            return failItem(item, "E-0501: image_tag 형식이 올바르지 않습니다.", e.getMessage());
+            return failItem(item, ItemErrorCode.INVALID_IMAGE_TAG, e.getMessage());
         }
         String fileName = ref.tarFileName();
         Path tarPath = Path.of(workDir, item.getVersionName(), "images", fileName);
@@ -95,7 +97,7 @@ public class GraphUploadService {
         try {
             fileSize = Files.size(tarPath);
         } catch (IOException e) {
-            return failItem(item, "E-0604: 업로드할 파일을 찾을 수 없습니다.", e.getMessage());
+            return failItem(item, ItemErrorCode.UPLOAD_FILE_MISSING, e.getMessage());
         }
 
         int attempt = 0;
@@ -109,7 +111,7 @@ public class GraphUploadService {
                 boolean retryable = isRetryable(e);
                 attempt++;
                 if (!retryable || attempt > retryProperties.maxRetries()) {
-                    return failItem(item, describeFailure(e), e.toString());
+                    return failItem(item, classifyFailure(e), e.toString());
                 }
                 item.incrementRetryCount();
                 packageItemRepository.save(item);
@@ -128,21 +130,26 @@ public class GraphUploadService {
     }
 
     /**
-     * DB에 남길 사유. 업스트림 예외 메시지를 그대로 쓰지 않는다 — {@code RestClientResponseException}의
-     * 메시지에는 Graph 응답 본문이 통째로 들어 있고, 그게 무인증
-     * {@code GET /api/package-jobs/{versionName}} 응답으로 그대로 나간다.
-     * 우리가 던진 {@code IllegalStateException}만 문구를 통제하므로 그대로 쓴다
-     * ({@code GraphFolderService.describeBriefly}와 같은 정책). 원문은 호출자가 로그로 남긴다.
+     * DB에 남길 사유를 코드로 고른다. 예외 메시지를 그대로 쓰지 않는다 —
+     * {@code RestClientResponseException}의 메시지에는 Graph 응답 본문이 통째로 들어 있고,
+     * 그게 무인증 {@code GET /api/package-jobs/{versionName}} 응답으로 나간다. 원문은 호출자가
+     * {@code detail}로 넘겨 로그에만 남긴다.
      */
-    private String describeFailure(RuntimeException e) {
-        if (e instanceof RestClientResponseException rex) {
-            return "E-1101: Graph 호출이 실패했습니다(status=%d).".formatted(rex.getStatusCode().value());
+    private ItemErrorCode classifyFailure(RuntimeException e) {
+        // 청크 재시도를 소진하고 올라온 타임아웃·5xx는 껍데기가 RetryableCallException이다 —
+        // 벗기지 않으면 Graph 장애가 UPLOAD_UNAVAILABLE이 아니라 UPLOAD_FAILED로 기록된다.
+        if (e instanceof RetryableCallException retryable) {
+            return classifyFailure(retryable.giveUpException());
         }
         if (e instanceof ApiException apiEx) {
-            return "%s: %s".formatted(apiEx.getErrorCode().getCode(), apiEx.getErrorCode().getDefaultMessage());
+            return switch (apiEx.getErrorCode()) {
+                case GRAPH_TOKEN_ISSUE_FAILED -> ItemErrorCode.UPLOAD_TOKEN_FAILED;
+                case GRAPH_FORBIDDEN -> ItemErrorCode.UPLOAD_FORBIDDEN;
+                case GRAPH_UNAVAILABLE -> ItemErrorCode.UPLOAD_UNAVAILABLE;
+                default -> ItemErrorCode.UPLOAD_FAILED;
+            };
         }
-        String message = e.getMessage();
-        return message != null && !message.isBlank() ? message : e.getClass().getSimpleName();
+        return ItemErrorCode.UPLOAD_FAILED;
     }
 
     /** 호출될 때마다 새 세션을 만든다 — 재시도가 이 메서드를 다시 부르는 것만으로 세션 재생성이 된다. */
@@ -196,7 +203,20 @@ public class GraphUploadService {
     private GraphApiClient.ChunkUploadResult putChunkWithRetry(String uploadUrl, byte[] chunk, long start, long end, long total) {
         int attempt = 0;
         while (true) {
-            GraphApiClient.ChunkUploadResult result = graphApiClient.putChunk(uploadUrl, chunk, start, end, total);
+            GraphApiClient.ChunkUploadResult result;
+            try {
+                result = graphApiClient.putChunk(uploadUrl, chunk, start, end, total);
+            } catch (RetryableCallException e) {
+                // 타임아웃을 그대로 올리면 uploadItemWithRetry가 새 세션으로 파일을 처음부터 다시 올린다 —
+                // GB 단위 tar에서는 수렴하지 않는다. 같은 Range 재전송은 안전하다(서버가 이미 받았다면
+                // 416으로 답하고 uploadFile의 재개 경로가 오프셋을 맞춘다).
+                if (attempt >= retryProperties.maxRetries()) {
+                    throw e;
+                }
+                attempt++;
+                RetryExecutor.sleepOrThrowOnInterrupt(retryProperties.backoffFor(attempt));
+                continue;
+            }
             int status = result.statusCode();
             boolean retryable = status == 429 || status >= 500;
             if (!retryable || attempt >= retryProperties.maxRetries()) {
@@ -257,8 +277,8 @@ public class GraphUploadService {
         }
     }
 
-    private boolean failItem(PackageItem item, String dbMessage, String detail) {
-        return PackageItemFailure.fail(packageItemRepository, item, dbMessage, detail);
+    private boolean failItem(PackageItem item, ItemErrorCode errorCode, String detail) {
+        return PackageItemFailure.fail(packageItemRepository, item, errorCode, detail);
     }
 
 }

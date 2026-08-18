@@ -16,6 +16,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
+import org.springframework.boot.http.client.ClientHttpRequestFactorySettings;
 import org.springframework.context.annotation.Scope;
 import org.springframework.web.client.RestClient;
 
@@ -71,6 +73,18 @@ class BeanWiringSmokeTest {
         @Bean
         ObjectMapper objectMapper() {
             return new ObjectMapper();
+        }
+
+        // HttpClientAutoConfiguration이 주는 두 빈. GraphApiClient가 업로드 전용 클라이언트를
+        // 만들 때 전역 connect-timeout·리다이렉트 정책을 상속받으려고 주입받는다.
+        @Bean
+        ClientHttpRequestFactoryBuilder<?> clientHttpRequestFactoryBuilder() {
+            return ClientHttpRequestFactoryBuilder.detect();
+        }
+
+        @Bean
+        ClientHttpRequestFactorySettings clientHttpRequestFactorySettings() {
+            return ClientHttpRequestFactorySettings.defaults().withConnectTimeout(Duration.ofSeconds(5));
         }
 
         // 실제 Boot 앱에서는 RestClientAutoConfiguration이 주입 지점마다 새 Builder를 주는

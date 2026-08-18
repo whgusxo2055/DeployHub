@@ -19,6 +19,9 @@ deployhub:
   # 로컬/테스트에는 /data/deployhub/jobs가 없다 — 빌드 디렉터리 아래로 돌려 디스크 확인이 통과하게 한다.
   work-dir: ./build/tmp/deployhub-jobs
   registry:
+    # 더미 자격증명으로는 매니페스트 조회가 타임아웃뿐이라 등록마다 재시도 백오프를 다 태운다.
+    # 실 자격증명을 넣고 dev로 띄울 때는 env var(REGISTRY_VERIFY_ON_REGISTER=true)로 되살릴 것.
+    verify-on-register: ${REGISTRY_VERIFY_ON_REGISTER:false}
     endpoint: ${NCR_ENDPOINT:placeholder.invalid}
     access-key: ${NCR_ACCESS_KEY:placeholder}
     secret-key: ${NCR_SECRET_KEY:placeholder}
