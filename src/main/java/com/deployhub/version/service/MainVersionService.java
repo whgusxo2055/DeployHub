@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -51,13 +52,20 @@ public class MainVersionService {
             throw new ApiException(
                     ErrorCode.MAIN_VERSION_ALREADY_EXISTS, List.of("versionName=" + request.versionName()));
         }
-        MainVersion saved = mainVersionRepository.save(MainVersion.builder()
-                .versionName(request.versionName())
-                .sortKey(MainVersion.sortKeyOf(request.versionName()))
-                .releaseNote(request.releaseNote())
-                .sqlScript(request.sqlScript())
-                .build());
-        return MainVersionInfoResponse.from(saved);
+        try {
+            MainVersion saved = mainVersionRepository.saveAndFlush(MainVersion.builder()
+                    .versionName(request.versionName())
+                    .sortKey(MainVersion.sortKeyOf(request.versionName()))
+                    .releaseNote(request.releaseNote())
+                    .sqlScript(request.sqlScript())
+                    .build());
+            return MainVersionInfoResponse.from(saved);
+        } catch (DataIntegrityViolationException e) {
+            // uk_main_version_sort_key. 등록 정규식이 정규형만 받으므로 정상 경로에서는 안 걸리고,
+            // 그 정규식이 느슨하던 시절에 들어온 옛 행('2026.08.05.1' 등)과 겹칠 때만 남는다.
+            throw new ApiException(
+                    ErrorCode.MAIN_VERSION_ALREADY_EXISTS, List.of("versionName=" + request.versionName()));
+        }
     }
 
     @Transactional

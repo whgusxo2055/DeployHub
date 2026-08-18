@@ -2,8 +2,15 @@ package com.deployhub.version.entity;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.deployhub.version.dto.MainVersionCreateRequest;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.Validation;
+import jakarta.validation.ValidatorFactory;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * "직전 메인버전"은 정렬키의 문자열 비교로 찾는다 — 그 비교가 날짜·index 순서와 일치하는지 본다.
@@ -28,10 +35,28 @@ class MainVersionSortKeyTest {
         assertThat(sortedByKey).containsExactly("2026.08.05", "2026.08.05-2", "2026.08.05-9", "2026.08.05-10");
     }
 
-    /** 구분자를 '.'과 '-' 둘 다 허용하는데 '-'(0x2D) &lt; '.'(0x2E)라 섞이면 순서가 또 갈린다. */
-    @Test
-    void 구분자가_섞여도_같은_index면_같은_정렬키다() {
-        assertThat(MainVersion.sortKeyOf("2026.08.05-1")).isEqualTo(MainVersion.sortKeyOf("2026.08.05.1"));
+    /**
+     * 정렬키는 구분자를 통일하고 index를 0으로 채우므로 서로 다른 version_name이 같은 정렬키가 될 수
+     * 있다. sort_key에는 UNIQUE 인덱스(V3)가 있어, 이런 별칭이 등록까지 오면 existsById 검사를 지나
+     * DB 제약 위반(500)으로 터진다 — 등록 정규식이 애초에 막는지 본다.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"2026.08.05.1", "2026.08.05-01", "2026.08.05-001", "2026.08.05-0", "2026.08.05-0001"})
+    void 정렬키가_겹치는_별칭_이름은_등록_정규식이_거부한다(String alias) {
+        assertThat(MainVersion.sortKeyOf(alias)).isIn("2026.08.05.001", "2026.08.05.000");
+        assertThat(violations(alias)).isNotEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"2026.08.05", "2026.08.05-1", "2026.08.05-10", "2026.08.05-999"})
+    void 정규형_이름은_통과한다(String versionName) {
+        assertThat(violations(versionName)).isEmpty();
+    }
+
+    private static Set<ConstraintViolation<MainVersionCreateRequest>> violations(String versionName) {
+        try (ValidatorFactory factory = Validation.buildDefaultValidatorFactory()) {
+            return factory.getValidator().validate(new MainVersionCreateRequest(versionName, null, null));
+        }
     }
 
     @Test
