@@ -62,9 +62,9 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(NoResourceFoundException.class)
     public ResponseEntity<ApiErrorResponse> handleNoResource(NoResourceFoundException ex, HttpServletRequest request) {
-        // getResourcePath()가 아니라 원본 URI를 찍는다 — 전자는 선행·중복·후행 슬래시를 정규화해 버려서
-        // `//api/x`·`/api/x/`처럼 클라이언트가 잘못 부른 경로가 매핑된 경로와 똑같이 보인다.
-        log.warn("매핑되지 않은 경로 요청: {} {}", ex.getHttpMethod(), request.getRequestURI());
+        // 운영자가 할 일이 없는 클라이언트 오류라 DEBUG다 — 공인 IP에 붙어 있어 favicon.ico와
+        // 봇 스캔이 WARN을 채운다. 원본 URI를 찍는 이유는 getResourcePath()가 슬래시를 정규화해서다.
+        log.debug("매핑되지 않은 경로 요청: {} {}", ex.getHttpMethod(), request.getRequestURI());
         return ResponseEntity.status(ErrorCode.ENDPOINT_NOT_FOUND.getHttpStatus())
                 .body(ApiErrorResponse.of(
                         ErrorCode.ENDPOINT_NOT_FOUND,
