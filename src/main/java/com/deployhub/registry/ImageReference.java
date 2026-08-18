@@ -14,8 +14,11 @@ import java.util.regex.Pattern;
 public record ImageReference(String repository, String tag) {
 
     // distribution의 reference 문법을 간략화한 버전.
-    private static final Pattern REPOSITORY =
-            Pattern.compile("[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*");
+    // distribution 문법: 구분자는 '.', '_', '__', '-'(연속 허용)다. 좁게 잡으면 유효한 저장소명이
+    // 등록 단계에서 거절된다(예: foo__bar, a--b).
+    private static final String SEPARATOR = "([._]|__|-+)";
+    private static final Pattern REPOSITORY = Pattern.compile(
+            "[a-z0-9]+(%s[a-z0-9]+)*(/[a-z0-9]+(%s[a-z0-9]+)*)*".formatted(SEPARATOR, SEPARATOR));
     private static final Pattern TAG = Pattern.compile("[\\w][\\w.-]{0,127}");
 
     public static ImageReference parse(String imageTag) {
