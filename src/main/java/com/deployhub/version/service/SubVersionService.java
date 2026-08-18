@@ -3,6 +3,8 @@ package com.deployhub.version.service;
 import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.registry.ImageReference;
+import com.deployhub.registry.ImageTagChecker;
+import com.deployhub.registry.ImageTagChecker.TagCheck;
 import com.deployhub.version.dto.SubVersionSavedResponse;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
 import com.deployhub.version.dto.SubmitStatusChangeRequest;
@@ -12,12 +14,13 @@ import com.deployhub.version.repository.ComponentRepository;
 import com.deployhub.version.repository.MainVersionRepository;
 import com.deployhub.version.repository.SubVersionRepository;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
-import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,78 +28,68 @@ import org.springframework.transaction.annotation.Transactional;
  * 서브버전 등록·수정. 요청에 포함된 code만 upsert하고 목록에서 빠진 기존 서브버전은 건드리지 않는다 —
  * 삭제는 {@code DELETE /api/sub-versions/{id}}로만 한다.
  */
+@Slf4j
 @Service
-@RequiredArgsConstructor
-@Transactional
 public class SubVersionService {
 
     private final MainVersionRepository mainVersionRepository;
     private final SubVersionRepository subVersionRepository;
-    private final ComponentRepository componentRepository;
     private final ManifestLockGuard manifestLockGuard;
+    private final SubVersionWriter subVersionWriter;
+    private final ImageTagChecker imageTagChecker;
+    // dev 프로필(더미 자격증명)과 레지스트리가 막힌 사내망에서 등록까지 죽지 않게 끌 수 있다.
+    private final boolean verifyOnRegister;
 
-    public List<SubVersionSavedResponse> upsertAll(String versionName, List<SubVersionUpsertRequest> requests) {
-        if (!mainVersionRepository.existsById(versionName)) {
-            throw new ApiException(
-                    ErrorCode.MAIN_VERSION_NOT_FOUND, "메인버전 '%s'을(를) 찾을 수 없습니다.".formatted(versionName));
-        }
-        manifestLockGuard.assertNotLocked(versionName);
-
-        // code -> 최종 image_tag 목록. 유일성 검증과 실제 저장이 같은 값을 쓰게 한다.
-        Map<String, List<String>> newTagsByCode = new HashMap<>();
-        for (SubVersionUpsertRequest request : requests) {
-            List<String> tags = resolveImageTags(request);
-            newTagsByCode.put(request.code(), tags);
-        }
-
-        assertImageTagsUnique(versionName, newTagsByCode);
-
-        List<SubVersionSavedResponse> responses = new ArrayList<>();
-        for (SubVersionUpsertRequest request : requests) {
-            SubVersion subVersion = subVersionRepository
-                    .findByMainVersionNameAndCode(versionName, request.code())
-                    .map(existing -> {
-                        existing.update(request.version(), request.note(), request.sortOrder());
-                        return existing;
-                    })
-                    .orElseGet(() -> subVersionRepository.save(SubVersion.builder()
-                            .mainVersionName(versionName)
-                            .code(request.code())
-                            .version(request.version())
-                            .note(request.note())
-                            .sortOrder(request.sortOrder())
-                            .build()));
-
-            List<Component> existingComponents = componentRepository.findBySubVersionIdOrderBySortOrderAsc(subVersion.getId());
-            if (!existingComponents.isEmpty()) {
-                componentRepository.deleteAll(existingComponents);
-                // Hibernate는 같은 트랜잭션 내 INSERT를 DELETE보다 먼저 플러시한다 —
-                // 같은 image_tag를 다시 쓰면 PK 충돌이 나므로 먼저 비운다.
-                componentRepository.flush();
-            }
-
-            List<String> tags = newTagsByCode.get(request.code());
-            int order = 0;
-            for (String tag : tags) {
-                componentRepository.save(Component.builder()
-                        .subVersionId(subVersion.getId())
-                        .imageTag(tag)
-                        .sortOrder(order++)
-                        .build());
-            }
-
-            responses.add(SubVersionSavedResponse.builder()
-                    .id(subVersion.getId())
-                    .code(subVersion.getCode())
-                    .version(subVersion.getVersion())
-                    .note(subVersion.getNote())
-                    .sortOrder(subVersion.getSortOrder())
-                    .imageTags(tags)
-                    .build());
-        }
-        return responses;
+    public SubVersionService(
+            MainVersionRepository mainVersionRepository,
+            SubVersionRepository subVersionRepository,
+            ManifestLockGuard manifestLockGuard,
+            SubVersionWriter subVersionWriter,
+            ImageTagChecker imageTagChecker,
+            @Value("${deployhub.registry.verify-on-register:true}") boolean verifyOnRegister) {
+        this.mainVersionRepository = mainVersionRepository;
+        this.subVersionRepository = subVersionRepository;
+        this.manifestLockGuard = manifestLockGuard;
+        this.subVersionWriter = subVersionWriter;
+        this.imageTagChecker = imageTagChecker;
+        this.verifyOnRegister = verifyOnRegister;
     }
 
+    /**
+     * 저장 자체는 {@link SubVersionWriter}가 트랜잭션 안에서 한다 — 레지스트리 조회가 DB 커넥션을
+     * 붙잡지 않게 순서를 이렇게 나눈다: 형식·중복 검사 → 레지스트리 확인 → 락 + 저장.
+     */
+    public List<SubVersionSavedResponse> upsertAll(String versionName, List<SubVersionUpsertRequest> requests) {
+        if (!mainVersionRepository.existsById(versionName)) {
+            throw new ApiException(ErrorCode.MAIN_VERSION_NOT_FOUND, List.of("versionName=" + versionName));
+        }
+        // 빠른 실패용 — 확정적인 판정은 writer가 락을 잡은 뒤 다시 한다.
+        manifestLockGuard.assertNotLocked(versionName);
+
+        Map<String, List<String>> newTagsByCode = resolveTagsByCode(requests);
+        assertImageTagsExistInRegistry(newTagsByCode);
+
+        return subVersionWriter.save(versionName, requests, newTagsByCode);
+    }
+
+    /**
+     * code -> 최종 image_tag 목록. 유일성 검증과 실제 저장이 같은 값을 쓰게 한다.
+     *
+     * <p>같은 배치에 code가 두 번 오면 거절한다 — Map에 담는 구조라 뒤엣것이 앞엣것을 조용히
+     * 덮어쓰는데, 저장 루프는 요청 목록을 그대로 돌아 <b>응답에 남의 태그가 실린다</b>.
+     */
+    private Map<String, List<String>> resolveTagsByCode(List<SubVersionUpsertRequest> requests) {
+        Map<String, List<String>> newTagsByCode = new LinkedHashMap<>();
+        for (SubVersionUpsertRequest request : requests) {
+            if (newTagsByCode.putIfAbsent(request.code(), resolveImageTags(request)) != null) {
+                throw new ApiException(
+                        ErrorCode.SUB_VERSION_VALIDATION_FAILED, List.of("code=" + request.code(), "duplicated"));
+            }
+        }
+        return newTagsByCode;
+    }
+
+    @Transactional
     public void delete(Long subVersionId) {
         SubVersion subVersion = subVersionRepository
                 .findById(subVersionId)
@@ -106,6 +99,8 @@ public class SubVersionService {
         subVersionRepository.delete(subVersion);
     }
 
+    /** 매니페스트 구성을 바꾸지 않으므로 {@link ManifestLockGuard}를 타지 않는다(확정 후에도 상태 갱신은 허용). */
+    @Transactional
     public void changeSubmitStatus(Long subVersionId, SubmitStatusChangeRequest request) {
         SubVersion subVersion = subVersionRepository
                 .findById(subVersionId)
@@ -122,52 +117,59 @@ public class SubVersionService {
         List<String> tags = (request.imageTags() == null || request.imageTags().isEmpty())
                 ? List.of("%s:%s".formatted(request.code(), request.version()))
                 : request.imageTags();
+        // 같은 서브버전 안의 중복은 유일성 검사(서로 다른 code 기준)를 통과해버린다 —
+        // 저장은 같은 PK로 두 번 일어나 1건이 되고 응답에는 2건이 실려 DB와 어긋난다.
+        if (Set.copyOf(tags).size() != tags.size()) {
+            throw new ApiException(ErrorCode.SUB_VERSION_VALIDATION_FAILED, List.of("code=" + request.code()));
+        }
         for (String tag : tags) {
             try {
                 ImageReference.parse(tag);
             } catch (IllegalArgumentException e) {
-                throw new ApiException(ErrorCode.SUB_VERSION_VALIDATION_FAILED, e.getMessage());
+                // 예외 메시지에는 태그 원문이 들어 있다 — 로그로만 남기고 응답에는 태그만 싣는다.
+                log.warn("image_tag 형식 오류: code={}, reason={}", request.code(), e.getMessage());
+                throw new ApiException(ErrorCode.SUB_VERSION_VALIDATION_FAILED, List.of(tag));
             }
         }
         return tags;
     }
 
     /**
-     * 메인버전 내 image_tag 유일성을 검증한다(E-0203). 검증 범위는 이 메인버전으로 한정한다 —
-     * 다른 메인버전이 같은 태그를 공유하는 것은 변경 여부 판정이 성립하기 위한 정상 상태다.
+     * 레지스트리에 없는 image_tag를 등록 단계에서 막는다(E-0206). 배포 파이프라인이 이미지를 밀어
+     * 올린 뒤에 버전 히스토리를 적는 운영 순서라, 여기서 없다는 건 사실상 오타다 — 패키징까지 가서
+     * E-0501로 드러나는 것보다 등록자에게 즉시 돌려주는 편이 낫다.
+     *
+     * <p><b>404(확실히 없음)에만 막는다</b> — 타임아웃·차단은 "확인 불가"이지 "없음"이 아니라서,
+     * 그걸로 막으면 레지스트리 장애가 등록 불가로 번진다. 그 경우는 패키징 단계에서 다시 걸린다.
+     *
+     * <p>ponytail: 태그 수에 비례해 DB 트랜잭션 안에서 동기로 기다린다(동시 {@code manifest.concurrency}건).
+     * 사람이 하루 몇 번 누르는 등록이라 감수한다 — 커넥션 점유가 문제가 되면 트랜잭션 밖으로 뺄 것.
      */
-    private void assertImageTagsUnique(String versionName, Map<String, List<String>> newTagsByCode) {
-        Map<String, String> tagOwner = new HashMap<>();
-
-        for (Map.Entry<String, List<String>> entry : newTagsByCode.entrySet()) {
-            for (String tag : entry.getValue()) {
-                String existingOwner = tagOwner.putIfAbsent(tag, entry.getKey());
-                if (existingOwner != null && !existingOwner.equals(entry.getKey())) {
-                    throw duplicateTagException(tag, existingOwner, entry.getKey());
-                }
-            }
+    private void assertImageTagsExistInRegistry(Map<String, List<String>> newTagsByCode) {
+        if (!verifyOnRegister) {
+            return;
         }
-
-        Set<String> touchedCodes = newTagsByCode.keySet();
-        Map<Long, String> codeBySubVersionId = subVersionRepository.findByMainVersionNameOrderBySortOrderAsc(versionName).stream()
-                .collect(Collectors.toMap(SubVersion::getId, SubVersion::getCode));
-
-        for (Component existing : componentRepository.findByMainVersionName(versionName)) {
-            String ownerCode = codeBySubVersionId.get(existing.getSubVersionId());
-            if (ownerCode == null || touchedCodes.contains(ownerCode)) {
-                // 이번 배치가 재생성할 컴포넌트이므로 비교 대상에서 제외한다.
-                continue;
-            }
-            String existingOwner = tagOwner.putIfAbsent(existing.getImageTag(), ownerCode);
-            if (existingOwner != null && !existingOwner.equals(ownerCode)) {
-                throw duplicateTagException(existing.getImageTag(), existingOwner, ownerCode);
-            }
+        List<String> tags = newTagsByCode.values().stream()
+                .flatMap(List::stream)
+                .distinct()
+                .sorted()
+                .toList();
+        List<TagCheck> checks;
+        try {
+            checks = imageTagChecker.checkAll(tags);
+        } catch (ApiException e) {
+            // 자격증명 만료(401/403)까지 등록 불가로 번지면 안 된다 — 확인 불가로 보고 통과시키고,
+            // 실제로 없는 태그라면 패키징 단계(E-0501)가 다시 잡는다.
+            log.warn("등록 시점 레지스트리 확인을 건너뜁니다: errorCode={}", e.getErrorCode().getCode());
+            return;
+        }
+        List<String> missing = checks.stream()
+                .filter(TagCheck::definitelyMissing)
+                .map(TagCheck::imageTag)
+                .toList();
+        if (!missing.isEmpty()) {
+            throw new ApiException(ErrorCode.IMAGE_TAG_NOT_IN_REGISTRY, missing);
         }
     }
 
-    private ApiException duplicateTagException(String tag, String codeA, String codeB) {
-        return new ApiException(
-                ErrorCode.DUPLICATE_IMAGE_TAG,
-                "image_tag '%s'가 서로 다른 서브버전(%s, %s)에 중복 지정되었습니다.".formatted(tag, codeA, codeB));
-    }
 }
