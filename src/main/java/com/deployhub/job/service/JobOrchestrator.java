@@ -55,7 +55,8 @@ public class JobOrchestrator {
         packageJobService.changeStatus(versionName, JobStatus.UPLOADING);
         upload(versionName);
 
-        packageJobService.changeStatus(versionName, JobStatus.DONE);
+        // DONE 고정이 아니다 — 부분 재시도로 건너뛴 FAILED 항목이 남아 있으면 FAILED로 끝난다.
+        packageJobService.finish(versionName);
     }
 
     // @Async void 밖으로 예외가 나가면 Spring이 로그만 남기고 상태를 방치한다 —

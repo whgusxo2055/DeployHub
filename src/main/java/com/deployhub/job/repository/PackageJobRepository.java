@@ -35,8 +35,7 @@ public interface PackageJobRepository extends JpaRepository<PackageJob, String> 
     }
 
     private static ApiException notFound(String versionName) {
-        return new ApiException(
-                ErrorCode.PACKAGE_JOB_NOT_FOUND, "메인버전 '%s'의 패키지 Job이 없습니다.".formatted(versionName));
+        return new ApiException(ErrorCode.PACKAGE_JOB_NOT_FOUND, List.of("versionName=" + versionName));
     }
 
     /** Job 목록 API의 상태 필터와 기동 시 고아 Job 정리가 함께 쓴다. */
