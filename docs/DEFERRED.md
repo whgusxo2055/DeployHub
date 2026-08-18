@@ -94,23 +94,7 @@ FAILED로 끝나면서 잠금을 놓는다.
 
 ---
 
-## 5. `URI.create(uploadUrl)` 실패 시 업로드 URL이 로그에 실린다
-
-**증상** — 발생한 적 없다. `uploadUrl`은 Graph 응답에서 오므로 형식 오류 가능성이 낮다.
-
-**원인** — `URI.create`가 던지는 `IllegalArgumentException` 메시지에는 입력 문자열 전체가
-들어간다. `GraphApiClient.putChunk`의 catch 두 개(`RestClientResponseException`/
-`ResourceAccessException`) 어디에도 안 걸려 그대로 올라가고, `GraphUploadService`가
-`e.toString()`을 `detail`로 넘겨 로그에 찍는다. 업로드 세션 URL은 tempauth 토큰이 담긴
-사전 인증 URL이라 **그 자체가 베어러 자격증명**이다.
-
-`error_message`에는 `ItemErrorCode` 문구만 저장되므로 무인증 API 응답으로는 나가지 않는다.
-
-**그때 할 일** — `URI.create` 호출을 try/catch로 감싸 메시지 없는 예외로 바꾼다.
-
----
-
-## 6. 무인증 `/retry` 한 번이 전량 재업로드를 유발할 수 있다
+## 5. 무인증 `/retry` 한 번이 전량 재업로드를 유발할 수 있다
 
 **증상** — 항목이 전부 UPLOADED인 FAILED Job에 태그 없이 `/retry`를 치면 수십 GB 재업로드와
 SharePoint 폴더 비우기가 일어난다. 종전에는 `NO_PACKAGING_TARGET`으로 막히던 호출이다.

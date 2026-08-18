@@ -152,7 +152,7 @@ public class GraphApiClient {
         try {
             ResponseEntity<String> response = uploadClient
                     .put()
-                    .uri(URI.create(uploadUrl))
+                    .uri(parseUploadUrl(uploadUrl))
                     .header(HttpHeaders.CONTENT_RANGE, "bytes %d-%d/%d".formatted(rangeStart, rangeEnd, totalSize))
                     .contentType(MediaType.APPLICATION_OCTET_STREAM)
                     .body(chunk)
@@ -171,9 +171,22 @@ public class GraphApiClient {
     /** 중단 후 재개용 세션 상태 조회. 인증 헤더 미부착·URI 처리는 {@link #putChunk}와 같은 이유. */
     public String getUploadSessionStatus(String uploadUrl) {
         try {
-            return uploadClient.get().uri(URI.create(uploadUrl)).retrieve().body(String.class);
+            return uploadClient.get().uri(parseUploadUrl(uploadUrl)).retrieve().body(String.class);
         } catch (ResourceAccessException ex) {
             throw uploadSessionTimeoutRetryable(ex);
+        }
+    }
+
+    /**
+     * {@code uploadUrl}은 tempauth 토큰이 담긴 사전 인증 URL이라 <b>그 자체가 자격증명</b>이다 —
+     * {@link URI#create}가 던지는 {@code IllegalArgumentException}에는 입력 문자열이 통째로 들어가고
+     * 그 메시지가 업로드 실패 detail로 로그에 찍힌다. 메시지 없는 예외로 바꿔 끊는다.
+     */
+    private static URI parseUploadUrl(String uploadUrl) {
+        try {
+            return URI.create(uploadUrl);
+        } catch (IllegalArgumentException ex) {
+            throw new ApiException(ErrorCode.GRAPH_UNAVAILABLE);
         }
     }
 
