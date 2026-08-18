@@ -69,6 +69,7 @@ docker compose -f docker-compose.dev.yml up -d
 | `GET /api/health/registry` · `/api/health/sharepoint` | 외부 연동 점검 (FN-04-1·FN-04-5) |
 
 운영 절차·환경변수·오류 코드별 대응은 [docs/OPERATIONS.md](docs/OPERATIONS.md)를 참고한다.
+알고도 미뤄 둔 이슈와 그때 할 일은 [docs/DEFERRED.md](docs/DEFERRED.md)에 있다.
 
 ## 테스트
 

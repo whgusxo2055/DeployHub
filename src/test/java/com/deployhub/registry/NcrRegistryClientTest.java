@@ -30,6 +30,10 @@ class NcrRegistryClientTest {
     private static final NcrProperties PROPERTIES =
             new NcrProperties("ncr.example.com", "AK", "SK", "/usr/bin/skopeo");
     private static final String BASIC = "Basic " + Base64.getEncoder().encodeToString("AK:SK".getBytes());
+    private static final String DIGEST_HEADER = "Docker-Content-Digest";
+    // 실제 레지스트리가 주는 형식이어야 한다 — 짧은 더미는 문법 검증에서 걸린다.
+    private static final String SINGLE_DIGEST = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    private static final String INDEX_DIGEST = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
 
     private MockRestServiceServer server;
     private NcrRegistryClient client;
@@ -59,7 +63,7 @@ class NcrRegistryClientTest {
 
     @Test
     void Basic_인증이_401이면_realm에서_토큰을_받아_Bearer로_재요청한다() {
-        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, BASIC))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
                         .header(
@@ -70,13 +74,11 @@ class NcrRegistryClientTest {
                 .andExpect(header(HttpHeaders.AUTHORIZATION, BASIC))
                 .andRespond(withSuccess("{\"token\":\"tok-123\"}", MediaType.APPLICATION_JSON));
 
-        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer tok-123"))
-                .andRespond(withSuccess("{\"tags\":[]}", MediaType.APPLICATION_JSON));
+                .andRespond(manifestResponse());
 
-        String body = client.get("/v2/repo/tags/list");
-
-        assertThat(body).contains("tags");
+        assertThat(client.getManifest(new ImageReference("repo", "v1")).orElseThrow().digest()).isEqualTo(SINGLE_DIGEST);
         server.verify();
     }
 
@@ -85,7 +87,7 @@ class NcrRegistryClientTest {
         // dev-ncr-sb 실측: NCR은 JSON을 담고도 Content-Type을 text/plain으로 주고,
         // 본문에 expires_in/issued_at을 함께 넣는다. 이 테스트가 없던 동안 나머지
         // 목킹이 전부 APPLICATION_JSON이라 실연동에서만 UnknownContentTypeException이 났다.
-        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
                         .header(
                                 HttpHeaders.WWW_AUTHENTICATE,
@@ -96,11 +98,11 @@ class NcrRegistryClientTest {
                         "{\"token\":\"tok-123\",\"expires_in\":3600,\"issued_at\":\"2026-08-07T03:49:44Z\"}",
                         MediaType.TEXT_PLAIN));
 
-        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer tok-123"))
-                .andRespond(withSuccess("{\"tags\":[]}", MediaType.APPLICATION_JSON));
+                .andRespond(manifestResponse());
 
-        assertThat(client.get("/v2/repo/tags/list")).contains("tags");
+        assertThat(client.getManifest(new ImageReference("repo", "v1"))).isPresent();
         server.verify();
     }
 
@@ -112,7 +114,7 @@ class NcrRegistryClientTest {
         server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr"))
                 .andRespond(withSuccess("<html>blocked</html>", MediaType.TEXT_HTML));
 
-        assertThatThrownBy(() -> client.get("/v2/repo/tags/list"))
+        assertThatThrownBy(() -> client.getManifest(new ImageReference("repo", "v1")))
                 .isInstanceOf(ApiException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.REGISTRY_UNREACHABLE);
     }
@@ -125,11 +127,17 @@ class NcrRegistryClientTest {
         server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr"))
                 .andRespond(withSuccess("null", MediaType.TEXT_PLAIN));
 
-        assertThatThrownBy(() -> client.get("/v2/repo/tags/list")).isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> client.getManifest(new ImageReference("repo", "v1"))).isInstanceOf(ApiException.class);
+    }
+
+    /** 레지스트리는 매니페스트 응답에 항상 digest 헤더를 준다 — 성공 응답의 기본형. */
+    private static org.springframework.test.web.client.response.DefaultResponseCreator manifestResponse() {
+        return withSuccess("{\"layers\":[{\"size\":7}]}", MediaType.APPLICATION_JSON)
+                .header(DIGEST_HEADER, SINGLE_DIGEST);
     }
 
     private void expectChallenge() {
-        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
                         .header(
                                 HttpHeaders.WWW_AUTHENTICATE,
@@ -140,13 +148,13 @@ class NcrRegistryClientTest {
     void realm이_다른_호스트면_자격증명을_보내지_않고_실패한다() {
         // 이 realm으로 accessKey/secretKey가 Basic 헤더에 담겨 나간다 — 401 헤더를 통제할
         // 수 있는 쪽이 임의 호스트를 지정하면 자격 증명을 그대로 받아간다.
-        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
                         .header(
                                 HttpHeaders.WWW_AUTHENTICATE,
                                 "Bearer realm=\"https://attacker.example.com/token\",service=\"ncr\""));
 
-        assertThatThrownBy(() -> client.get("/v2/repo/tags/list")).isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> client.getManifest(new ImageReference("repo", "v1"))).isInstanceOf(ApiException.class);
         // attacker.example.com으로는 요청이 안 나간다 — 미등록 요청이면 여기서 실패한다.
         server.verify();
     }
@@ -155,7 +163,7 @@ class NcrRegistryClientTest {
     void 여러_scheme이_섞인_challenge에서_Bearer_구간만_읽는다() {
         // "Bearer realm=...", 뒤에 다른 scheme(Basic)이 콤마로 이어붙는 경우 —
         // 마지막 realm이 이기면 안 되고, Bearer 구간의 realm만 써야 한다.
-        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
                         .header(
                                 HttpHeaders.WWW_AUTHENTICATE,
@@ -164,22 +172,22 @@ class NcrRegistryClientTest {
         server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr.example.com"))
                 .andRespond(withSuccess("{\"token\":\"tok-123\"}", MediaType.APPLICATION_JSON));
 
-        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer tok-123"))
-                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+                .andRespond(manifestResponse());
 
-        client.get("/v2/repo/tags/list");
+        client.getManifest(new ImageReference("repo", "v1"));
 
         server.verify(); // attacker.example.com으로는 아무 요청도 안 나감 (미등록 요청이면 실패함)
     }
 
     @Test
     void realm이_HTTPS가_아니면_자격증명을_보내지_않고_실패한다() {
-        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
                         .header(HttpHeaders.WWW_AUTHENTICATE, "Bearer realm=\"http://auth.example.com/token\""));
 
-        assertThatThrownBy(() -> client.get("/v2/repo/tags/list"))
+        assertThatThrownBy(() -> client.getManifest(new ImageReference("repo", "v1")))
                 .isInstanceOf(ApiException.class)
                 .extracting(ex -> ((ApiException) ex).getErrorCode())
                 .isEqualTo(ErrorCode.REGISTRY_UNAUTHORIZED);
@@ -189,10 +197,10 @@ class NcrRegistryClientTest {
 
     @Test
     void 응답이_401이고_Bearer_challenge가_없으면_재시도_없이_즉시_실패한다() {
-        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
 
-        assertThatThrownBy(() -> client.get("/v2/repo/tags/list"))
+        assertThatThrownBy(() -> client.getManifest(new ImageReference("repo", "v1")))
                 .isInstanceOf(ApiException.class)
                 .extracting(ex -> ((ApiException) ex).getErrorCode())
                 .isEqualTo(ErrorCode.REGISTRY_UNAUTHORIZED);
@@ -202,14 +210,14 @@ class NcrRegistryClientTest {
 
     @Test
     void 응답이_5xx면_재시도_후에도_실패시_레지스트리_오류로_던진다() {
-        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, BASIC))
                 .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
-        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, BASIC))
                 .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
 
-        assertThatThrownBy(() -> client.get("/v2/repo/tags/list"))
+        assertThatThrownBy(() -> client.getManifest(new ImageReference("repo", "v1")))
                 .isInstanceOf(ApiException.class)
                 .extracting(ex -> ((ApiException) ex).getErrorCode())
                 .isEqualTo(ErrorCode.REGISTRY_TIMEOUT);
@@ -226,9 +234,10 @@ class NcrRegistryClientTest {
                 .andExpect(header(
                         HttpHeaders.ACCEPT,
                         containsString("application/vnd.docker.distribution.manifest.list.v2+json")))
-                .andRespond(withSuccess("{\"layers\":[]}", MediaType.APPLICATION_JSON));
+                .andRespond(withSuccess("{\"layers\":[]}", MediaType.APPLICATION_JSON)
+                        .header(DIGEST_HEADER, SINGLE_DIGEST));
 
-        client.getManifest("repo", "tag");
+        client.getManifest(new ImageReference("repo", "tag"));
 
         server.verify();
     }
@@ -244,7 +253,7 @@ class NcrRegistryClientTest {
                    "platform":{"os":"linux","architecture":"amd64"}}]}""";
         server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/tag"))
                 .andRespond(withSuccess(index, MediaType.APPLICATION_JSON)
-                        .header("Docker-Content-Digest", "sha256:index"));
+                        .header("Docker-Content-Digest", INDEX_DIGEST));
         // skopeo를 --multi-arch all로 돌려 인덱스를 통째로 담으므로, 어테스테이션(unknown/unknown)도
         // 아카이브에 들어간다 — 빼고 더하면 디스크 가드가 실제보다 작게 잡는다.
         server.expect(requestTo(
@@ -259,31 +268,34 @@ class NcrRegistryClientTest {
                         "{\"layers\":[{\"size\":10},{\"size\":32}]}", MediaType.APPLICATION_JSON));
 
         NcrRegistryClient.ManifestInfo info =
-                client.getManifest("repo", "tag").orElseThrow();
+                client.getManifest(new ImageReference("repo", "tag")).orElseThrow();
 
         // digest는 태그가 가리키는 인덱스 digest 그대로여야 한다 (skopeo 비교 대상과 동일).
-        assertThat(info.digest()).isEqualTo("sha256:index");
+        assertThat(info.digest()).isEqualTo(INDEX_DIGEST);
         assertThat(info.totalSize()).isEqualTo(50L);
         server.verify();
     }
 
     @Test
-    void 인덱스는_있는데_자식_조회가_404여도_이미지_없음으로_보고하지_않는다() {
-        // 자식 404가 그대로 올라가면 getManifest의 404 분기가 Optional.empty()로 삼켜,
-        // 태그가 멀쩡히 존재하는데 E-0501("이미지가 존재하지 않습니다")로 오판한다.
+    void 인덱스_자식_조회가_404여도_이미지는_존재로_보고하고_크기만_미상으로_둔다() {
+        // 자식 404가 그대로 올라가면 (a) getManifest의 404 분기가 Optional.empty()로 삼켜
+        // 태그가 멀쩡히 존재하는데 E-0501로 오판하거나, (b) 예외가 되어 인덱스 이미지 하나가
+        // 형제 태그 전체의 검증까지 중단시킨다. 둘 다 아니고, 크기만 미상이어야 한다.
         String index =
                 """
                 {"manifests":[{"digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000",
                   "platform":{"os":"linux","architecture":"amd64"}}]}""";
         server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/tag"))
                 .andRespond(withSuccess(index, MediaType.APPLICATION_JSON)
-                        .header("Docker-Content-Digest", "sha256:index"));
+                        .header("Docker-Content-Digest", INDEX_DIGEST));
         server.expect(requestTo(
                         "https://ncr.example.com/v2/repo/manifests/sha256:0000000000000000000000000000000000000000000000000000000000000000"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, BASIC))
                 .andRespond(withStatus(HttpStatus.NOT_FOUND));
 
-        assertThatThrownBy(() -> client.getManifest("repo", "tag")).isInstanceOf(ApiException.class);
+        assertThat(client.getManifest(new ImageReference("repo", "tag")).orElseThrow().totalSize())
+                .isEqualTo(NcrRegistryClient.ManifestInfo.UNKNOWN_SIZE);
+        server.verify();
     }
 
     @Test
@@ -298,11 +310,11 @@ class NcrRegistryClientTest {
                   {"digest":"sha256:abc{evil}","platform":{"os":"linux","architecture":"amd64"}}]}""";
         server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/tag"))
                 .andRespond(withSuccess(index, MediaType.APPLICATION_JSON)
-                        .header("Docker-Content-Digest", "sha256:index"));
+                        .header("Docker-Content-Digest", INDEX_DIGEST));
 
         // 0이 아니라 UNKNOWN_SIZE여야 한다 — 0으로 돌려주면 디스크 가드가 "필요 용량 0"으로
         // 읽어 무조건 통과한다.
-        assertThat(client.getManifest("repo", "tag").orElseThrow().totalSize())
+        assertThat(client.getManifest(new ImageReference("repo", "tag")).orElseThrow().totalSize())
                 .isEqualTo(NcrRegistryClient.ManifestInfo.UNKNOWN_SIZE);
         server.verify(); // 두 번째 요청이 나가면 미등록 요청으로 실패한다
     }
@@ -313,9 +325,10 @@ class NcrRegistryClientTest {
         server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/tag"))
                 .andRespond(withSuccess(
                         "{\"layers\":[{\"size\":-1},{\"size\":9223372036854775807},{\"size\":5}]}",
-                        MediaType.APPLICATION_JSON));
+                        MediaType.APPLICATION_JSON)
+                        .header(DIGEST_HEADER, SINGLE_DIGEST));
 
-        assertThat(client.getManifest("repo", "tag").orElseThrow().totalSize())
+        assertThat(client.getManifest(new ImageReference("repo", "tag")).orElseThrow().totalSize())
                 .isEqualTo(Long.MAX_VALUE);
     }
 
@@ -323,37 +336,84 @@ class NcrRegistryClientTest {
     void 단일_매니페스트는_추가_조회_없이_그대로_합산한다() {
         server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/tag"))
                 .andRespond(withSuccess("{\"layers\":[{\"size\":7}]}", MediaType.APPLICATION_JSON)
-                        .header("Docker-Content-Digest", "sha256:single"));
+                        .header("Docker-Content-Digest", SINGLE_DIGEST));
 
         NcrRegistryClient.ManifestInfo info =
-                client.getManifest("repo", "tag").orElseThrow();
+                client.getManifest(new ImageReference("repo", "tag")).orElseThrow();
 
         assertThat(info.totalSize()).isEqualTo(7L);
         server.verify(); // 두 번째 요청이 나가면 미등록 요청으로 실패한다
     }
 
     @Test
+    void layers가_아예_없는_매니페스트는_크기를_0이_아니라_미상으로_돌려준다() {
+        // 0을 돌려주면 "필요 용량 0"으로 읽혀 디스크 가드가 항상 통과한다(fail-open).
+        // config만 있고 layers 키가 없는 형태 — 형식이 기대와 다르면 미상이 안전하다.
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/tag"))
+                .andRespond(withSuccess("{\"config\":{\"size\":3}}", MediaType.APPLICATION_JSON)
+                        .header(DIGEST_HEADER, SINGLE_DIGEST));
+
+        assertThat(client.getManifest(new ImageReference("repo", "tag")).orElseThrow().totalSize())
+                .isEqualTo(NcrRegistryClient.ManifestInfo.UNKNOWN_SIZE);
+    }
+
+    @Test
+    void digest_헤더가_없으면_도달성_오류로_끊는다() {
+        // null digest를 통과시키면 검증은 성공하고, 다운로드 직후 대조에서 전 항목이
+        // E-0603("재푸시 의심")으로 오진된다 — 원인과 표시가 완전히 어긋난다.
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/tag"))
+                .andRespond(withSuccess("{\"layers\":[{\"size\":7}]}", MediaType.APPLICATION_JSON));
+
+        assertThatThrownBy(() -> client.getManifest(new ImageReference("repo", "tag")))
+                .isInstanceOf(ApiException.class)
+                .extracting(ex -> ((ApiException) ex).getErrorCode())
+                .isEqualTo(ErrorCode.REGISTRY_UNREACHABLE);
+    }
+
+    @Test
+    void 없는_태그는_404를_Optional_empty로_돌려준다() {
+        // E-0501("이미지 없음") 판정의 근거. 예외로 새면 배치 전체가 중단된다.
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/tag"))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND));
+
+        assertThat(client.getManifest(new ImageReference("repo", "tag"))).isEmpty();
+    }
+
+    @Test
+    void Bearer로_재요청한_결과가_404여도_Optional_empty다() {
+        // 실 레지스트리 경로는 항상 401 → 토큰 → 재요청이다. 이 조합에서 404 분기가
+        // 살아 있는지는 Basic만 쓰는 테스트로는 검증되지 않는다.
+        expectChallenge();
+        server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr"))
+                .andRespond(withSuccess("{\"token\":\"tok-123\"}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer tok-123"))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND));
+
+        assertThat(client.getManifest(new ImageReference("repo", "v1"))).isEmpty();
+        server.verify();
+    }
+
+    @Test
     void Bearer_재요청_중_연결_실패는_재시도_대상으로_분류된다() {
-        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
                         .header(HttpHeaders.WWW_AUTHENTICATE, "Bearer realm=\"https://ncr.example.com/auth/token\""));
         server.expect(requestTo("https://ncr.example.com/auth/token"))
                 .andRespond(withSuccess("{\"token\":\"tok-123\"}", MediaType.APPLICATION_JSON));
         // Bearer로 재요청한 두 번째 호출이 연결 실패로 끊긴다 — 예전 구현은 이 예외가
         // 분류 없이 그대로 새어 나가 재시도가 걸리지 않는 버그가 있었다.
-        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
                 .andRespond(request -> {
                     throw new IOException("connection reset");
                 });
-        server.expect(requestTo("https://ncr.example.com/v2/repo/tags/list"))
+        server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, BASIC))
-                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+                .andRespond(manifestResponse());
 
         // maxRetries=1이므로 재시도는 처음부터(Basic) 다시 시작한다 — 재시도 대상으로
         // 분류되었다는 것 자체(= ApiException으로 안 죽고 재시도가 실제로 일어남)를 검증한다.
-        String body = client.get("/v2/repo/tags/list");
-
-        assertThat(body).isEqualTo("{}");
+        assertThat(client.getManifest(new ImageReference("repo", "v1"))).isPresent();
         server.verify();
     }
 }

@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 import com.deployhub.version.entity.Component;
+import com.deployhub.version.entity.MainVersion;
 import com.deployhub.version.entity.SubVersion;
 import com.deployhub.version.repository.ComponentRepository;
 import com.deployhub.version.repository.MainVersionRepository;
@@ -45,8 +46,7 @@ class VersionComparisonServiceTest {
 
         when(subVersionRepository.findByMainVersionNameOrderBySortOrderAsc(versionName))
                 .thenReturn(List.of(cc, ocr));
-        when(mainVersionRepository.findFirstByVersionNameLessThanOrderByVersionNameDesc(versionName))
-                .thenReturn(Optional.empty());
+        when(mainVersionRepository.findPrevious(MainVersion.sortKeyOf(versionName))).thenReturn(Optional.empty());
         when(componentRepository.findBySubVersionIdIn(any()))
                 .thenReturn(List.of(
                         newComponent(1L, "sb-cc-api:v2.0.25.8612"), newComponent(2L, "ocr:v0.9.15")));

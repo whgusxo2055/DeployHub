@@ -14,6 +14,8 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
@@ -74,16 +76,14 @@ public class NcrRegistryClient {
     // ponytail: Bearer 토큰을 캐시하지 않아 매 호출이 401→토큰발급→재요청 3 RTT다.
     // 대량 순회가 병목이 되면 GraphTokenService 같은 만료 캐시를 붙일 것.
     /** 인증된 GET 응답 본문. 실패 시 재시도 정책을 적용한다. */
-    public String get(String path) {
-        return retryExecutor.execute("NCR GET " + path, () -> authenticated(path, auth -> doGet(path, auth)));
-    }
-
     /**
      * 매니페스트의 digest와 레이어 크기 합계(무결성 대조·디스크 판정 기준값).
      * 404만 {@link Optional#empty()}로 돌려 호출자가 배치를 계속하게 하고, 나머지는 예외로 던진다.
      */
-    public Optional<ManifestInfo> getManifest(String repository, String tag) {
-        String path = "/v2/%s/manifests/%s".formatted(repository, tag);
+    public Optional<ManifestInfo> getManifest(ImageReference ref) {
+        // 파싱된 참조만 받는다 — 검증되지 않은 문자열 2개를 받으면 "호출 전에 parse할 것"이라는
+        // 규약이 주석에만 남는다. RelativePathGuard는 ".."나 "{"를 걸러주지 않는다.
+        String path = "/v2/%s/manifests/%s".formatted(ref.repository(), ref.tag());
         try {
             return Optional.of(retryExecutor.execute(
                     "NCR manifest " + path, () -> authenticated(path, auth -> doGetManifest(path, auth))));
@@ -127,8 +127,19 @@ public class NcrRegistryClient {
         if (ex.getStatusCode().value() != 401 || ex.getResponseHeaders() == null) {
             return null;
         }
-        String header = ex.getResponseHeaders().getFirst(HttpHeaders.WWW_AUTHENTICATE);
-        return header != null && header.regionMatches(true, 0, "Bearer", 0, 6) ? header : null;
+        // 헤더가 여러 줄로 오거나 "Basic ..., Bearer ..." 순서일 수 있다 — 파서는 그걸 처리하도록
+        // 만들어져 있는데 진입 조건만 "Bearer로 시작"이면 그 대응이 사장된다.
+        List<String> headers = ex.getResponseHeaders().get(HttpHeaders.WWW_AUTHENTICATE);
+        if (headers == null) {
+            return null;
+        }
+        // getValuesAsList는 따옴표를 무시하고 콤마로 쪼개 realm="...",service="..."를 망가뜨린다.
+        for (String header : headers) {
+            if (header != null && header.toLowerCase(Locale.ROOT).contains("bearer")) {
+                return header;
+            }
+        }
+        return null;
     }
 
     private ManifestInfo doGetManifest(String path, String authorizationHeader) {
@@ -140,6 +151,13 @@ public class NcrRegistryClient {
                 .retrieve()
                 .toEntity(String.class);
         String digest = response.getHeaders().getFirst(DIGEST_HEADER);
+        // 헤더가 없거나 형식이 다르면 여기서 끊는다 — null을 통과시키면 검증은 성공하고,
+        // 다운로드 직후 digest 대조에서 전 항목이 E-0603("재푸시 의심")으로 오진된다.
+        // 실제 레지스트리는 항상 이 헤더를 보내므로 정상 경로에는 영향이 없다.
+        if (digest == null || !DIGEST.matcher(digest).matches()) {
+            log.warn("NCR 응답에 {} 헤더가 없거나 형식이 올바르지 않습니다: {}", DIGEST_HEADER, path);
+            throw new ApiException(ErrorCode.REGISTRY_UNREACHABLE);
+        }
         return new ManifestInfo(digest, totalSize(response.getBody(), path, authorizationHeader));
     }
 
@@ -171,13 +189,24 @@ public class NcrRegistryClient {
             if (child == null) {
                 return ManifestInfo.UNKNOWN_SIZE;
             }
+            // 자식에 layers가 없으면(중첩 인덱스 등) 0이 아니라 미상이다 — 아래 sumLayerSizes 참고.
+            if (!child.path("layers").isArray()) {
+                log.warn("NCR 인덱스 자식에 layers가 없어 크기를 미상으로 처리합니다: {}", path);
+                return ManifestInfo.UNKNOWN_SIZE;
+            }
             long childTotal = sumLayerSizes(child);
             total = total + childTotal < total ? Long.MAX_VALUE : total + childTotal;
         }
         return total;
     }
 
-    /** ponytail: 인덱스 → 매니페스트 1단계만 따라간다. 중첩 인덱스는 실물이 드물어 미지원. */
+    /**
+     * ponytail: 인덱스 → 매니페스트 1단계만 따라간다. 중첩 인덱스는 실물이 드물어 미지원.
+     *
+     * <p>자식 조회 실패는 {@code null}로 돌려 <b>크기만 미상</b>으로 만든다 — 예외로 올리면 인덱스
+     * 이미지 하나가 배치 전체(형제 태그 11개)의 검증을 중단시키고, 바깥 재시도가 부모부터 다시 받아
+     * 요청이 (1+자식수)×시도 수로 증폭된다. 401/403만은 자격증명 문제라 그대로 올린다.
+     */
     private JsonNode fetchChildManifest(String path, String childDigest, String authorizationHeader) {
         String childPath = path.substring(0, path.lastIndexOf('/') + 1) + childDigest;
         RelativePathGuard.requireRelative(childPath); // 방어층 — 형식 검증은 호출부가 이미 했다
@@ -190,22 +219,36 @@ public class NcrRegistryClient {
                     .retrieve()
                     .body(String.class));
         } catch (RestClientResponseException ex) {
-            // 반드시 다른 타입으로 바꿔 던진다 — RestClientResponseException을 그대로 올리면
-            // getManifest의 404 분기가 삼켜 "이미지 없음"으로 오판한다.
             RuntimeException classified = classify(ex, childPath);
-            throw classified instanceof RestClientResponseException
-                    ? new ApiException(ErrorCode.REGISTRY_UNREACHABLE)
-                    : classified;
+            if (classified instanceof ApiException apiException
+                    && apiException.getErrorCode() == ErrorCode.REGISTRY_UNAUTHORIZED) {
+                throw apiException;
+            }
+            log.warn("NCR 인덱스 자식 매니페스트 조회 실패({}) — 크기를 미상으로 처리합니다: {}",
+                    ex.getStatusCode().value(), childPath);
+            return null;
         } catch (ResourceAccessException ex) {
-            throw timeoutRetryable(childPath, ex);
+            log.warn("NCR 인덱스 자식 매니페스트 조회 시간 초과 — 크기를 미상으로 처리합니다: {}", childPath);
+            return null;
         }
     }
 
-    // size는 응답 본문 값이라 음수·거대값이 올 수 있다 — 합계가 뒤집히면 디스크 판정이
-    // 무조건 통과하므로 음수는 버리고 포화 덧셈으로 누적한다.
+    /**
+     * size는 응답 본문 값이라 음수·거대값이 올 수 있다 — 합계가 뒤집히면 디스크 판정이 무조건
+     * 통과하므로 음수는 버리고 포화 덧셈으로 누적한다.
+     *
+     * <p>{@code layers}가 아예 없으면 0이 아니라 {@link ManifestInfo#UNKNOWN_SIZE}다.
+     * {@code MissingNode}는 빈 순회라 0을 돌려주는데, 0은 "필요 용량 0"으로 읽혀
+     * <b>디스크 가드가 항상 통과</b>한다(fail-open). 형태가 기대와 다르면 미상이 안전하다.
+     */
     private static long sumLayerSizes(JsonNode manifest) {
+        JsonNode layers = manifest.path("layers");
+        if (!layers.isArray()) {
+            log.warn("NCR 매니페스트에 layers 배열이 없어 크기를 미상으로 처리합니다.");
+            return ManifestInfo.UNKNOWN_SIZE;
+        }
         long total = 0L;
-        for (JsonNode layer : manifest.path("layers")) {
+        for (JsonNode layer : layers) {
             long size = Math.max(0L, layer.path("size").asLong(0L));
             total = total + size < total ? Long.MAX_VALUE : total + size;
         }
@@ -219,7 +262,7 @@ public class NcrRegistryClient {
         try {
             return OBJECT_MAPPER.readTree(manifestJson);
         } catch (Exception e) {
-            log.warn("NCR 매니페스트 응답을 파싱할 수 없어 크기를 0으로 처리합니다.", e);
+            log.warn("NCR 매니페스트 응답을 파싱할 수 없어 크기를 미상으로 처리합니다.", e);
             return null;
         }
     }
@@ -288,7 +331,8 @@ public class NcrRegistryClient {
         try {
             // service/scope는 서버가 준 값이라 toUri()가 던질 수 있다 — try 안에 둬서 분류되지 않은
             // 예외가 배치를 중단시키지 않게 한다. 검사를 마친 realmUri를 그대로 쓴다(fromUriString은 더 느슨하다).
-            UriComponentsBuilder uri = UriComponentsBuilder.fromUri(realmUri);
+            // 값은 업스트림 문자열이라 인코딩해서 붙인다 — 안 하면 값 안의 '&'가 파라미터를 가른다.
+            UriComponentsBuilder uri = UriComponentsBuilder.fromUri(realmUri).encode();
             if (params.get("service") != null) {
                 uri.queryParam("service", params.get("service"));
             }

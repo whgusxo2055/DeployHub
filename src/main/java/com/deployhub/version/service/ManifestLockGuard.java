@@ -3,6 +3,7 @@ package com.deployhub.version.service;
 import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.job.repository.PackageJobRepository;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -18,8 +19,7 @@ public class ManifestLockGuard {
             if (job.blocksManifestModification()) {
                 throw new ApiException(
                         ErrorCode.MANIFEST_LOCKED,
-                        "메인버전 '%s'은(는) 이미 패키징 Job(%s)이 있어 수정할 수 없습니다."
-                                .formatted(versionName, job.getStatus()));
+                        List.of("versionName=" + versionName, "status=" + job.getStatus()));
             }
         });
     }

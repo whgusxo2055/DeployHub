@@ -12,9 +12,9 @@ import java.util.List;
 public record SubVersionUpsertRequest(
         @NotBlank @Size(max = 50) @Schema(example = "cc") String code,
         @NotBlank @Size(max = 50) @Schema(example = "v2.0.25") String version,
-        @Schema(description = "이 모듈의 변경 사항") String note,
+        @Size(max = 10000) @Schema(description = "이 모듈의 변경 사항") String note,
         @NotNull @Schema(description = "문서 표기 순서") Integer sortOrder,
-        @Schema(description = "명시하지 않으면 {code}:{version} 1건을 자동 생성한다")
+        @Size(max = 30) @Schema(description = "명시하지 않으면 {code}:{version} 1건을 자동 생성한다 (최대 30건)")
         List<@NotBlank @Size(max = 200) String> imageTags)
         implements ValidatedRequest {
 

@@ -89,14 +89,17 @@ public class PackageJobService {
     /** 매니페스트 확정. 순서 고정 — 찌꺼기 행을 남기지 않도록 검증을 전부 마친 뒤에야 package_item을 재생성한다. */
     @Transactional
     public PackageJobDetailResponse create(String versionName, PackageJobCreateRequest request) {
-        assertMainVersionExists(versionName);
+        // 서브버전 upsert(SubVersionWriter)와 같은 행을 잡는다 — 없으면 두 트랜잭션이 각자
+        // 검사를 통과해, 확정된 package_item과 DB 컴포넌트가 어긋난 채 패키징이 돈다.
+        mainVersionRepository
+                .lockByVersionName(versionName)
+                .orElseThrow(() ->
+                        new ApiException(ErrorCode.MAIN_VERSION_NOT_FOUND, List.of("versionName=" + versionName)));
 
         PackagingEligibility eligibility = packagingEligibilityService.evaluate(versionName);
         if (!eligibility.eligible()) {
             throw new ApiException(
-                    ErrorCode.PACKAGING_BLOCKED_BY_PENDING,
-                    ErrorCode.PACKAGING_BLOCKED_BY_PENDING.getDefaultMessage(),
-                    eligibility.blockingSubVersionCodes());
+                    ErrorCode.PACKAGING_BLOCKED_BY_PENDING, eligibility.blockingSubVersionCodes());
         }
 
         List<String> changedTags = versionComparisonService.changedImageTags(versionName);
@@ -147,6 +150,23 @@ public class PackageJobService {
     }
 
     /**
+     * 마지막 전이. FAILED 항목이 하나라도 남아 있으면 DONE 대신 FAILED로 끝낸다 — 부분 재시도는
+     * 지정한 태그만 PENDING으로 되돌리므로 나머지 FAILED는 다운로드(PENDING만)·업로드
+     * (DOWNLOADED/UPLOADED만) 양쪽에서 스킵된 채 여기 도달한다. DONE으로 끝내면 그 항목은
+     * 영구 복구 불가다 — {@link #retry}가 FAILED인 Job만 받고, 정리 배치가 로컬 tar를 지운다.
+     */
+    @Transactional
+    public void finish(String versionName) {
+        PackageJob job = packageJobRepository.getOrThrow(versionName);
+        boolean anyFailed = packageItemRepository.findByVersionNameOrderByImageTagAsc(versionName).stream()
+                .anyMatch(item -> item.getStatus() == PackageItemStatus.FAILED);
+        if (anyFailed) {
+            log.warn("Job '{}'에 FAILED 항목이 남아 DONE 대신 FAILED로 종료합니다.", versionName);
+        }
+        job.changeStatus(anyFailed ? JobStatus.FAILED : JobStatus.DONE);
+    }
+
+    /**
      * 폴더 확보 후 {@code GraphFolderService}가 호출한다. 엔티티 변경이 이 {@code @Transactional}
      * 메서드를 거쳐야 한다 — 리포지토리를 직접 만지면 detached 인스턴스 merge라 동시 변경을 조용히 덮어쓴다.
      */
@@ -158,6 +178,7 @@ public class PackageJobService {
 
     /**
      * 수동 재시도. {@code imageTags}가 비면 FAILED 전체가 대상이고, DOWNLOADED/UPLOADED는 지정해도 제외된다.
+     * 되돌릴 FAILED가 없어도 태그 미지정이면 단계 재개만 시킨다(Job 단위 실패 복구).
      * 작업 디렉터리가 소실됐으면 {@code force=true}일 때만 전 항목을 되돌린다.
      * 재개는 이 트랜잭션이 커밋된 뒤 컨트롤러가 {@link JobOrchestrator#resume}으로 호출한다.
      */
@@ -170,15 +191,20 @@ public class PackageJobService {
             throw new ApiException(ErrorCode.RETRY_REJECTED_JOB_NOT_FAILED);
         }
 
+        List<PackageItem> allItems = packageItemRepository.findByVersionNameOrderByImageTagAsc(versionName);
         boolean workDirLost = !Files.isDirectory(Path.of(workDir, versionName, "images"));
         if (workDirLost && !request.force()) {
             throw new ApiException(ErrorCode.WORK_DIR_LOST);
         }
 
-        List<PackageItem> allItems = packageItemRepository.findByVersionNameOrderByImageTagAsc(versionName);
         List<PackageItem> targets = resolveRetryTargets(allItems, request, workDirLost);
-        if (targets.isEmpty()) {
-            throw new ApiException(ErrorCode.NO_PACKAGING_TARGET, "재시도할 대상이 없습니다.");
+        // 되돌릴 항목이 없어도 태그를 지정하지 않은 요청은 통과시킨다 — 항목은 전부 성공했는데
+        // Job 단위 실패(폴더 확보 실패 등)로 FAILED가 된 경우가 있고, 여기서 막으면 그 Job은
+        // 영구 좌초한다(FAILED라 상태 전이도 못 하고 재시도도 못 한다). resume이 다운로드·업로드를
+        // 다시 돌면서 이미 끝난 항목은 알아서 건너뛴다.
+        boolean explicitTargets = request.imageTags() != null && !request.imageTags().isEmpty();
+        if (targets.isEmpty() && (explicitTargets || allItems.isEmpty())) {
+            throw new ApiException(ErrorCode.NO_PACKAGING_TARGET, List.of("target=retry"));
         }
 
         for (PackageItem item : targets) {
@@ -231,15 +257,14 @@ public class PackageJobService {
 
     private void assertMainVersionExists(String versionName) {
         if (!mainVersionRepository.existsById(versionName)) {
-            throw new ApiException(
-                    ErrorCode.MAIN_VERSION_NOT_FOUND, "메인버전 '%s'을(를) 찾을 수 없습니다.".formatted(versionName));
+            throw new ApiException(ErrorCode.MAIN_VERSION_NOT_FOUND, List.of("versionName=" + versionName));
         }
     }
 
     private void assertTargetTagsValid(String versionName, List<String> targetTags) {
         Set<String> unique = new HashSet<>(targetTags);
         if (unique.size() != targetTags.size()) {
-            throw new ApiException(ErrorCode.INVALID_IMAGE_TAG_SELECTION, "imageTags 목록에 중복된 태그가 있습니다.");
+            throw new ApiException(ErrorCode.INVALID_IMAGE_TAG_SELECTION, List.of("duplicated"));
         }
 
         // 등록 시점에 이미 문법을 강제하지만, 그 검증 이전에 저장된 행이 남아 있을 수 있다 —
@@ -248,7 +273,9 @@ public class PackageJobService {
             try {
                 ImageReference.parse(tag);
             } catch (IllegalArgumentException e) {
-                throw new ApiException(ErrorCode.INVALID_IMAGE_TAG_SELECTION, e.getMessage());
+                // 예외 메시지에는 원문이 들어 있다 — 로그로만 남기고 응답에는 태그만 싣는다.
+                log.warn("확정 대상 image_tag 형식 오류: versionName={}, reason={}", versionName, e.getMessage());
+                throw new ApiException(ErrorCode.INVALID_IMAGE_TAG_SELECTION, List.of(tag));
             }
         }
 
@@ -259,9 +286,7 @@ public class PackageJobService {
         if (!unknownTags.isEmpty()) {
             List<String> shown = unknownTags.stream().limit(20).toList();
             throw new ApiException(
-                    ErrorCode.INVALID_IMAGE_TAG_SELECTION,
-                    "메인버전에 없는 image_tag가 포함되어 있습니다: %s".formatted(shown),
-                    shown);
+                    ErrorCode.INVALID_IMAGE_TAG_SELECTION, shown);
         }
     }
 
@@ -298,7 +323,6 @@ public class PackageJobService {
         if (blocked) {
             throw new ApiException(
                     ErrorCode.DUPLICATE_PACKAGE_JOB,
-                    "메인버전 '%s'의 패키지 Job(%s)이 이미 있습니다.".formatted(versionName, existing.getStatus()),
                     List.of("status=" + existing.getStatus(), "spFolderUrl=" + existing.getSpFolderUrl()));
         }
         existing.resetForRerun(createdBy);
@@ -341,9 +365,8 @@ public class PackageJobService {
                 minFreeDiskBytes,
                 force);
         if (!force) {
-            throw new ApiException(
-                    ErrorCode.INSUFFICIENT_DISK_SPACE,
-                    "작업 디렉터리 여유 공간이 부족합니다. force=true로 진행할 수 있습니다.");
+            // 경로·용량은 위 로그에만 남긴다 — details로도 인프라 정보를 내보내지 않는다.
+            throw new ApiException(ErrorCode.INSUFFICIENT_DISK_SPACE);
         }
     }
 }

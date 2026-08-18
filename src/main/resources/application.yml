@@ -50,8 +50,13 @@ deployhub:
     access-key: ${NCR_ACCESS_KEY:}
     secret-key: ${NCR_SECRET_KEY:}
     cli-path: ${NCR_CLI_PATH:/usr/bin/skopeo}
+    # 서브버전 등록 시 image_tag가 레지스트리에 실제로 있는지 확인해 없으면 거부한다(E-0206).
+    # 배포 파이프라인이 이미지를 올린 뒤 버전 히스토리를 적는 순서라서 "없음 = 오타"로 볼 수 있다.
+    # 레지스트리에 닿을 수 없는 환경(더미 자격증명·사내망 차단)에서만 끈다.
+    verify-on-register: ${REGISTRY_VERIFY_ON_REGISTER:true}
 
-  # Microsoft Graph / SharePoint. SP_DRIVE_ID를 비우면 사이트의 기본 문서 라이브러리를 조회해 쓴다.
+  # Microsoft Graph / OneDrive. SP_DRIVE_ID를 비우면 로그인한 계정의 기본 드라이브를 조회해 쓴다.
+  # 위임(delegated) 인증에서는 client-secret·site-id를 쓰지 않는다(app-only 복귀 대비로만 남김).
   sharepoint:
     tenant-id: ${GRAPH_TENANT_ID:}
     client-id: ${GRAPH_CLIENT_ID:}
@@ -59,11 +64,15 @@ deployhub:
     site-id: ${SP_SITE_ID:}
     drive-id: ${SP_DRIVE_ID:}
     root-path: ${SP_ROOT_PATH:/Deploy/Packages}
+    # 위임 인증용 refresh token 보관 파일. 최초 1회 device code 흐름으로 채워 넣는다.
+    # work-dir '밖'에 둔다 — work-dir은 운영자가 반입 tar를 꺼내 가는 곳이라, 그 안에 두면
+    # rsync/tar에 장기 자격증명이 조용히 딸려 나간다. 경로는 생성자에서 normalize된다.
+    refresh-token-file: ${GRAPH_REFRESH_TOKEN_FILE:${deployhub.work-dir}/../.graph-refresh-token}
 
   # 모든 외부 호출(NCR·Graph)이 공유하는 재시도 정책.
   retry:
     max-retries: ${MAX_RETRY:3}
-    backoff: ${RETRY_BACKOFF:5,15}
+    backoff: ${RETRY_BACKOFF:5s,15s,45s}
 
   # Job 오케스트레이션. min-free-disk-bytes는 확정 시점의 경고 기준(기본 50GiB)일 뿐이고,
   # 실제 필요 용량은 다운로드 단계가 매니페스트 크기로 따로 판정한다.
@@ -85,6 +94,10 @@ deployhub:
   # 업로드. 320 KiB(327680)의 배수여야 한다 — 아니면 UploadChunkSizeValidator가 기동을 막는다.
   upload:
     chunk-size: ${UPLOAD_CHUNK_SIZE:10485760}
+    # 청크 PUT·업로드 세션 조회 전용 타임아웃(단위 없으면 초). spring.http.client.read-timeout(10초)은
+    # JDK 클라이언트에서 바디 전송까지 포함한 요청 전체의 데드라인이라 10 MiB 청크에 그대로 쓰면
+    # 지속 8.4 Mbps 미만에서 무조건 끊긴다. 300초면 하한이 약 0.27 Mbps가 된다.
+    request-timeout: ${UPLOAD_REQUEST_TIMEOUT:300s}
 
   # 보존·정리 배치. days/count는 SharePoint 폴더에, local-cleanup-delay-hours는
   # 중계 서버 작업 디렉터리에 적용된다.
