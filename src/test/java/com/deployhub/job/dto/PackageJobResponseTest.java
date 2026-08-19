@@ -13,7 +13,6 @@ class PackageJobResponseTest {
 
     private final PackageJob job = PackageJob.builder()
             .versionName("2026.09.01")
-            .createdBy("tester")
             .build();
 
     @Test
@@ -45,7 +44,6 @@ class PackageJobResponseTest {
         PackageJob doneJob = PackageJob.builder()
                 .versionName("2026.09.01")
                 .status(JobStatus.DONE)
-                .createdBy("tester")
                 .spFolderUrl("https://contoso.sharepoint.com/folder")
                 .build();
 

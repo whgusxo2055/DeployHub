@@ -166,7 +166,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         // package-job API로도 Job을 만들 수 있지만, 이 테스트는 ManifestLockGuard
         // (구현계획서 Phase 1-2, E-0204)만 좁게 검증하려는 것이라 DB에 직접 상태를 만든다.
         jdbcTemplate.update(
-                "INSERT INTO package_job (version_name, status, created_by) VALUES (?, 'PENDING', 'tester')",
+                "INSERT INTO package_job (version_name, status) VALUES (?, 'PENDING')",
                 versionName);
 
         ResponseEntity<String> response = restTemplate.exchange(
@@ -345,7 +345,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         registerMainVersion(versionName);
         putSubVersion(versionName, new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.PENDING, null));
         jdbcTemplate.update(
-                "INSERT INTO package_job (version_name, status, created_by) VALUES (?, 'PENDING', 'tester')",
+                "INSERT INTO package_job (version_name, status) VALUES (?, 'PENDING')",
                 versionName);
 
         // 필드 무변경 + 상태만 → 통과

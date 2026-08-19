@@ -54,12 +54,11 @@ public class PackagePurgeService {
 
     /**
      * 배치 1단계 — 작업 디렉터리만 지운다. SharePoint 폴더는 남으므로 {@code deleted_at}도 찍지 않는다.
-     *
-     * @return 디렉터리가 사라졌으면 true. false는 삭제 실패만 뜻한다 — 그 사이 재실행된 경우는
-     *     {@code PACKAGE_CLEANUP_BLOCKED}로 던져 배치가 실패와 구분하게 한다.
+     * 그래서 같은 Job이 매 배치 다시 선정된다 — {@link LocalDir#ABSENT}를 따로 두지 않으면
+     * 이미 지운 건을 매일 "정리했다"고 보고하게 된다.
      */
     @Transactional
-    public boolean purgeLocal(String versionName, String trigger, Instant expectedFinishedAt) {
+    public LocalDir purgeLocal(String versionName, String trigger, Instant expectedFinishedAt) {
         PackageJob job = packageJobRepository.lockOrThrow(versionName);
         if (job.getStatus() != JobStatus.DONE) {
             throw rerunDetected(versionName, "status=" + job.getStatus());
@@ -84,27 +83,32 @@ public class PackagePurgeService {
         }
         assertNotRerun(job, expectedFinishedAt);
 
+        // 이미 정리된 건은 지울 게 없다. 그냥 두면 죽은 폴더에 Graph DELETE를 다시 쏘고,
+        // markDeleted가 deleted_at을 덮어써 "언제 정리했나"라는 감사 흔적이 사라진다.
+        if (job.getDeletedAt() != null) {
+            return new PurgeResult(LocalDir.ABSENT, false);
+        }
+
         String folderId = job.getSpFolderId();
         boolean folderDeleted = folderId != null && !folderId.isBlank();
         if (folderDeleted) {
             graphApiClient.delete("/drives/%s/items/%s".formatted(graphApiClient.resolveDriveId(), folderId));
         }
-        boolean localDeleted = deleteLocalDir(versionName, trigger);
+        LocalDir localDir = deleteLocalDir(versionName, trigger);
         // 디렉터리를 못 지웠으면 deleted_at을 찍지 않는다 — 찍으면 alive 필터에서 빠져
         // 다음 배치가 이 건을 다시 집지 못하고 디렉터리가 영구히 남는다.
-        if (localDeleted) {
+        if (localDir != LocalDir.FAILED) {
             job.markDeleted();
         }
 
         AUDIT.info(
-                "package-purge versionName={} trigger={} spFolderId={} folderDeleted={} localDeleted={} jobCreatedBy={}",
+                "package-purge versionName={} trigger={} spFolderId={} folderDeleted={} localDir={}",
                 versionName,
                 trigger,
                 folderId,
                 folderDeleted,
-                localDeleted,
-                job.getCreatedBy());
-        return new PurgeResult(localDeleted, folderDeleted);
+                localDir);
+        return new PurgeResult(localDir, folderDeleted);
     }
 
     /**
@@ -124,18 +128,18 @@ public class PackagePurgeService {
         }
     }
 
-    private boolean deleteLocalDir(String versionName, String trigger) {
+    private LocalDir deleteLocalDir(String versionName, String trigger) {
         Path dir = jobDir(versionName);
         if (!Files.exists(dir)) {
-            return true;
+            return LocalDir.ABSENT;
         }
         if (FileSystemUtils.deleteRecursively(dir.toFile())) {
             AUDIT.info("local-purge versionName={} trigger={} dir={}", versionName, trigger, dir);
-            return true;
+            return LocalDir.DELETED;
         }
         // 다음 배치에서 다시 시도한다 — 조건(DONE + 유예 경과 + 디렉터리 존재)이 그대로라 자연히 재선정된다.
         log.warn("E-1403: 작업 디렉터리 삭제에 실패했습니다. 다음 배치에서 재시도합니다: {}", dir);
-        return false;
+        return LocalDir.FAILED;
     }
 
     /**
@@ -152,5 +156,12 @@ public class PackagePurgeService {
     }
 
     /** 무엇이 실제로 지워졌는지 — 응답이 "정리 완료"를 과장하지 않게 한다. */
-    public record PurgeResult(boolean localDeleted, boolean folderDeleted) {}
+    public record PurgeResult(LocalDir localDir, boolean folderDeleted) {}
+
+    /** 작업 디렉터리를 이번에 지웠는지, 애초에 없었는지, 못 지웠는지. 셋을 뭉치면 보고가 과장된다. */
+    public enum LocalDir {
+        DELETED,
+        ABSENT,
+        FAILED
+    }
 }

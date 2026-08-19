@@ -108,7 +108,7 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(file.fileUrl()).isEqualTo("https://contoso.sharepoint.com/api.tar");
         assertThat(file.fileSize()).isEqualTo(1_234L);
         // Phase 4가 만든 .tar 파일명과 같은 규칙(ImageReference.tarFileName)이어야 한다.
-        assertThat(file.fileName()).startsWith("sb-cc-api_v2.0.25.8612_").endsWith(".tar");
+        assertThat(file.fileName()).isEqualTo("sb-cc-api_v2.0.25.8612.tar");
         // image_tag → component → sub_version 역참조 (구현계획서 589행).
         assertThat(file.subVersionCode()).isEqualTo("cc");
         assertThat(file.subVersionVersion()).isEqualTo("v2.0.25");
@@ -119,7 +119,7 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
         registerMainVersion("2027.01.02");
         registerSubVersion("2027.01.02", "pips", "1.0.0", null);
         jdbcTemplate.update(
-                "INSERT INTO package_job (version_name, status, created_by) VALUES (?, 'DOWNLOADING', 'tester')",
+                "INSERT INTO package_job (version_name, status) VALUES (?, 'DOWNLOADING')",
                 "2027.01.02");
 
         ResponseEntity<String> response =
@@ -183,7 +183,7 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
         insertDoneJobWithLocalDir("2027.04.01", Instant.now().minus(Duration.ofSeconds(1)));
         registerMainVersion("2027.04.02");
         jdbcTemplate.update(
-                "INSERT INTO package_job (version_name, status, created_by) VALUES (?, 'UPLOADING', 'tester')",
+                "INSERT INTO package_job (version_name, status) VALUES (?, 'UPLOADING')",
                 "2027.04.02");
 
         ResponseEntity<PackageCleanupResponse> deleted = restTemplate.exchange(
@@ -209,6 +209,48 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
                 "2027.04.02");
         assertThat(blocked.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(blocked.getBody()).contains("E-1404");
+    }
+
+    @Test
+    void 이미_사라진_작업_디렉터리는_정리했다고_보고하지_않는다() {
+        // 1단계는 deleted_at을 안 찍어 대상에서 안 빠지므로, 같은 Job이 매일 다시 선정된다.
+        // 디렉터리가 이미 없으면 지운 게 없는데도 localCleaned에 실려 운영자가 오판한다(실측).
+        registerMainVersion("2027.08.01");
+        insertDoneJob("2027.08.01", null, Instant.now().minus(Duration.ofDays(2)));
+
+        ResponseEntity<PackageCleanupResponse> response =
+                restTemplate.postForEntity("/api/admin/cleanup?dryRun=false", null, PackageCleanupResponse.class);
+
+        assertThat(response.getBody().localCleaned()).isEmpty();
+        // 없는 것은 실패도 아니다 — 재시도해도 달라질 게 없다.
+        assertThat(response.getBody().failed()).isEmpty();
+    }
+
+    @Test
+    void 이미_정리된_Job을_다시_지우면_아무것도_지웠다고_하지_않는다() throws IOException {
+        insertDoneJobWithLocalDir("2027.08.11", Instant.now().minus(Duration.ofDays(2)));
+
+        ResponseEntity<PackageCleanupResponse> first = deletePackage("2027.08.11");
+        assertThat(first.getBody().localCleaned()).containsExactly("2027.08.11");
+        Instant 최초_정리_시각 = queryDeletedAt("2027.08.11").toInstant();
+
+        ResponseEntity<PackageCleanupResponse> second = deletePackage("2027.08.11");
+
+        assertThat(second.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(second.getBody().localCleaned()).isEmpty();
+        assertThat(second.getBody().sharePointCleaned()).isEmpty();
+        assertThat(second.getBody().failed()).isEmpty();
+        // 재호출이 deleted_at을 덮어쓰면 "언제 정리했나"라는 감사 흔적이 사라진다.
+        assertThat(queryDeletedAt("2027.08.11").toInstant()).isEqualTo(최초_정리_시각);
+    }
+
+    private ResponseEntity<PackageCleanupResponse> deletePackage(String versionName) {
+        return restTemplate.exchange(
+                "/api/package-jobs/{versionName}/package",
+                HttpMethod.DELETE,
+                HttpEntity.EMPTY,
+                PackageCleanupResponse.class,
+                versionName);
     }
 
     @Test
@@ -311,8 +353,8 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
     /** {@code sp_folder_id}는 비워 둔다 — Graph 호출 없이 정리 로직만 태우기 위함이다(클래스 javadoc). */
     private void insertJob(String versionName, String status, String folderUrl, Instant finishedAt) {
         jdbcTemplate.update(
-                "INSERT INTO package_job (version_name, status, created_by, sp_folder_url, finished_at) "
-                        + "VALUES (?, ?, 'tester', ?, ?)",
+                "INSERT INTO package_job (version_name, status, sp_folder_url, finished_at) "
+                        + "VALUES (?, ?, ?, ?)",
                 versionName,
                 status,
                 folderUrl,

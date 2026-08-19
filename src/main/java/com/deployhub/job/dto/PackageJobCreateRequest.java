@@ -15,7 +15,6 @@ import java.util.List;
 public record PackageJobCreateRequest(
         @Size(max = 500) @Schema(description = "패키징 대상. 비우면 변경된 컴포넌트 전체가 기본값 (미변경분도 지정 가능)")
         List<@NotBlank @Size(max = 200) String> imageTags,
-        @NotBlank @Size(max = 100) @Schema(description = "실행자") String createdBy,
         @Schema(
                         description =
                                 "true면 완료된(DONE) Job을 초기화해 재생성하고, 디스크 여유 공간 부족 경고도 함께 우회한다. "

@@ -18,7 +18,6 @@ public record PackageJobResponse(
         int completedItems,
         int progress,
         String spFolderUrl,
-        String createdBy,
         Instant createdAt,
         Instant finishedAt) {
 
@@ -38,7 +37,6 @@ public record PackageJobResponse(
                 .completedItems((int) completed)
                 .progress(total == 0 ? 0 : (int) (completed * 100 / total))
                 .spFolderUrl(job.getSpFolderUrl())
-                .createdBy(job.getCreatedBy())
                 .createdAt(job.getCreatedAt())
                 .finishedAt(job.getFinishedAt())
                 .build();

@@ -126,7 +126,6 @@ class PackageJobRetryTest {
         return PackageJob.builder()
                 .versionName(VERSION_NAME)
                 .status(status)
-                .createdBy("tester")
                 .build();
     }
 

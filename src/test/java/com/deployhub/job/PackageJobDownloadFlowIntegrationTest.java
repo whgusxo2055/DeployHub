@@ -220,8 +220,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(finalState.items().get(0).status()).isEqualTo("DOWNLOADED");
         assertThat(finalState.items().get(0).fileSize()).isGreaterThan(0);
 
-        // 파일명은 ImageReference.tarFileName()이 해시 접미사까지 붙여 만든다(충돌 방지,
-        // 코드리뷰로 발견된 버그의 수정) — 여기서 그 로직을 그대로 재계산하는 대신,
+        // 파일명 규칙(ImageReference.tarFileName)을 여기서 그대로 재계산하는 대신,
         // images/ 아래 실제로 만들어진 .tar 하나를 그대로 찾아서 쓴다.
         Path imagesDir = Path.of(workDir, versionName, "images");
         List<Path> tarFiles;
@@ -387,7 +386,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         // 없으면 E-0703(작업 디렉터리 소실)로 막혀 이 테스트의 의도(대상 선정)를 못 본다.
         Files.createDirectories(Path.of(workDir, versionName, "images"));
         jdbcTemplate.update(
-                "INSERT INTO package_job (version_name, status, created_by) VALUES (?, 'FAILED', 'tester')", versionName);
+                "INSERT INTO package_job (version_name, status) VALUES (?, 'FAILED')", versionName);
         jdbcTemplate.update(
                 "INSERT INTO package_item (version_name, image_tag, status, error_message) VALUES (?, ?, 'FAILED', 'E-0601: 이전 실패')",
                 versionName,
@@ -415,7 +414,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         String versionName = "2026.20.04";
         registerMainVersion(versionName);
         jdbcTemplate.update(
-                "INSERT INTO package_job (version_name, status, created_by) VALUES (?, 'DONE', 'tester')", versionName);
+                "INSERT INTO package_job (version_name, status) VALUES (?, 'DONE')", versionName);
 
         ResponseEntity<String> response = restTemplate.postForEntity(
                 "/api/package-jobs/{versionName}/retry",
@@ -432,7 +431,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         String versionName = "2026.20.05";
         registerMainVersion(versionName);
         jdbcTemplate.update(
-                "INSERT INTO package_job (version_name, status, created_by) VALUES (?, 'FAILED', 'tester')", versionName);
+                "INSERT INTO package_job (version_name, status) VALUES (?, 'FAILED')", versionName);
         jdbcTemplate.update(
                 "INSERT INTO package_item (version_name, image_tag, status) VALUES (?, ?, 'FAILED')",
                 versionName,
@@ -469,7 +468,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
     private ResponseEntity<PackageJobDetailResponse> createPackageJob(String versionName, List<String> imageTags) {
         return restTemplate.postForEntity(
                 "/api/main-versions/{versionName}/package-job",
-                new PackageJobCreateRequest(imageTags, "tester", false),
+                new PackageJobCreateRequest(imageTags, false),
                 PackageJobDetailResponse.class,
                 versionName);
     }

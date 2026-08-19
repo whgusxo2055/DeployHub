@@ -1,9 +1,5 @@
 package com.deployhub.registry;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 import java.util.regex.Pattern;
 
 /**
@@ -33,20 +29,10 @@ public record ImageReference(String repository, String tag) {
 
     /**
      * 다운로드가 만든 tar 파일명을 업로드가 다시 계산해 찾으므로 두 곳이 이 규칙을 공유해야 한다.
-     * '/'·':' 치환만으로는 단사가 아니라({@code a/b:1}과 {@code a_b:1}이 충돌) 해시 접미사를 붙인다.
+     * 치환이 단사가 아니라 서로 다른 태그가 같은 이름이 될 수 있다 — 그건 확정 시점에 거부한다
+     * ({@code PackageJobService.assertTargetTagsValid}).
      */
     public String tarFileName() {
-        String identity = repository + ":" + tag;
-        String base = identity.replace('/', '_').replace(':', '_');
-        return base + "_" + sha256Hex8(identity) + ".tar";
-    }
-
-    private static String sha256Hex8(String value) {
-        try {
-            byte[] hash = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash, 0, 4);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 알고리즘을 사용할 수 없습니다.", e);
-        }
+        return (repository + ":" + tag).replace('/', '_').replace(':', '_') + ".tar";
     }
 }

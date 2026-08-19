@@ -109,7 +109,12 @@ public class GraphFolderService {
         return "/drives/%s/root:%s/%s".formatted(driveId, graphProperties.rootPath(), versionName);
     }
 
-    /** ponytail: nextLink를 따라가지 않는 대신 {@code $top=999}로 기본 페이지 크기보다 넉넉히 받는다. */
+    /**
+     * 이전 확정본을 남기지 않는다 — 파일명 충돌 검사가 "이번 확정본" 안에서만 도는 근거다
+     * ({@code PackageJobService.assertTargetTagsValid}). 여기를 증분 업로드로 바꾸면 그 검사도 넓혀야 한다.
+     *
+     * <p>ponytail: nextLink를 따라가지 않는 대신 {@code $top=999}로 기본 페이지 크기보다 넉넉히 받는다.
+     */
     private void clearExistingChildren(String driveId, String folderItemId) {
         String response = graphApiClient.get("/drives/%s/items/%s/children?$top=999".formatted(driveId, folderItemId));
         for (String childId : parseChildIds(response)) {

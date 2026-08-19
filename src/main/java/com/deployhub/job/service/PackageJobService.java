@@ -76,16 +76,6 @@ public class PackageJobService {
         this.minFreeDiskBytes = minFreeDiskBytes;
     }
 
-    /**
-     * 매니페스트 확정 요청의 기본 선택값이지 선택 가능 범위가 아니다 — 선택 범위는 메인버전의
-     * 전체 컴포넌트다(미변경분 포함). 전체 목록은 {@code GET /api/main-versions/{versionName}}이
-     * {@code changed} 플래그와 함께 준다. 없는 메인버전이면 404.
-     */
-    public List<String> changedComponents(String versionName) {
-        assertMainVersionExists(versionName);
-        return versionComparisonService.changedImageTags(versionName);
-    }
-
     /** 매니페스트 확정. 순서 고정 — 찌꺼기 행을 남기지 않도록 검증을 전부 마친 뒤에야 package_item을 재생성한다. */
     @Transactional
     public PackageJobDetailResponse create(String versionName, PackageJobCreateRequest request) {
@@ -114,7 +104,7 @@ public class PackageJobService {
         // 락보다 먼저 한다 — 락을 쥔 채 파일시스템 I/O를 하면 WORK_DIR이 네트워크 스토리지일 때
         // DB 커넥션과 행 락이 무기한 묶인다.
         checkDiskSpace(request.force());
-        PackageJob job = resolveJob(versionName, request.createdBy(), request.force());
+        PackageJob job = resolveJob(versionName, request.force());
 
         packageItemRepository.deleteByVersionName(versionName);
         // Hibernate는 같은 트랜잭션 내 INSERT를 DELETE보다 먼저 플러시한다 — 같은 image_tag를
@@ -126,13 +116,9 @@ public class PackageJobService {
         }
 
         // package_job은 메인버전당 1건이라 force 재생성 시 이전 이력이 덮어써진다 —
-        // 누가 무엇을 확정했는지는 감사 로그에만 남는다.
+        // 무엇을 확정했는지는 감사 로그에만 남는다.
         AUDIT.info(
-                "job-created versionName={} createdBy={} force={} imageTags={}",
-                versionName,
-                request.createdBy(),
-                request.force(),
-                targetTags);
+                "job-created versionName={} force={} imageTags={}", versionName, request.force(), targetTags);
 
         return toDetail(job, versionName);
     }
@@ -255,12 +241,6 @@ public class PackageJobService {
                 .toList();
     }
 
-    private void assertMainVersionExists(String versionName) {
-        if (!mainVersionRepository.existsById(versionName)) {
-            throw new ApiException(ErrorCode.MAIN_VERSION_NOT_FOUND, List.of("versionName=" + versionName));
-        }
-    }
-
     private void assertTargetTagsValid(String versionName, List<String> targetTags) {
         Set<String> unique = new HashSet<>(targetTags);
         if (unique.size() != targetTags.size()) {
@@ -269,9 +249,20 @@ public class PackageJobService {
 
         // 등록 시점에 이미 문법을 강제하지만, 그 검증 이전에 저장된 행이 남아 있을 수 있다 —
         // 오염된 image_tag가 package_item으로 스냅샷되지 않게 한 번 더 거른다.
+        Set<String> fileNames = new HashSet<>();
         for (String tag : targetTags) {
             try {
-                ImageReference.parse(tag);
+                // 파일명은 '/'·':'를 '_'로 치환해 만들어 단사가 아니다 — "a/b:1"과 "a_b:1"이 같은
+                // 이름이 된다. 두 항목은 같은 폴더에 병렬로 내려받으므로 여기서 막지 않으면
+                // 한쪽이 다른 쪽을 덮어쓴 채 고객사로 나간다.
+                //
+                // 이 검사가 "이번 확정본" 안에서만 도는 것으로 충분한 근거는, 업로드가 매번
+                // GraphFolderService.ensureFolder로 폴더를 비우고 전량 다시 올리기 때문이다.
+                // 그 전량 재업로드를 "이미 올라간 건 건너뛴다"로 바꾸면 이전 확정본의 파일과도
+                // 대조해야 한다.
+                if (!fileNames.add(ImageReference.parse(tag).tarFileName())) {
+                    throw new ApiException(ErrorCode.INVALID_IMAGE_TAG_SELECTION, List.of("fileNameCollision", tag));
+                }
             } catch (IllegalArgumentException e) {
                 // 예외 메시지에는 원문이 들어 있다 — 로그로만 남기고 응답에는 태그만 싣는다.
                 log.warn("확정 대상 image_tag 형식 오류: versionName={}, reason={}", versionName, e.getMessage());
@@ -297,13 +288,11 @@ public class PackageJobService {
      * <p>존재 확인은 반드시 {@code existsById}로 할 것 — {@code findById}를 쓰면 엔티티가 1차 캐시에
      * 올라가 뒤따르는 {@code FOR UPDATE}가 stale 인스턴스를 돌려줘 락이 무력화된다.
      */
-    private PackageJob resolveJob(String versionName, String createdBy, boolean force) {
+    private PackageJob resolveJob(String versionName, boolean force) {
         if (!packageJobRepository.existsById(versionName)) {
             try {
-                return packageJobRepository.saveAndFlush(PackageJob.builder()
-                        .versionName(versionName)
-                        .createdBy(createdBy)
-                        .build());
+                return packageJobRepository.saveAndFlush(
+                        PackageJob.builder().versionName(versionName).build());
             } catch (DataIntegrityViolationException e) {
                 throw translateJobInsertConflict(e);
             }
@@ -325,7 +314,7 @@ public class PackageJobService {
                     ErrorCode.DUPLICATE_PACKAGE_JOB,
                     List.of("status=" + existing.getStatus(), "spFolderUrl=" + existing.getSpFolderUrl()));
         }
-        existing.resetForRerun(createdBy);
+        existing.resetForRerun();
         return existing;
     }
 

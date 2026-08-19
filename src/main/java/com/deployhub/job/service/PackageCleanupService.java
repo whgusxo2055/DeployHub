@@ -6,6 +6,7 @@ import com.deployhub.job.dto.PackageCleanupResponse;
 import com.deployhub.job.entity.JobStatus;
 import com.deployhub.job.entity.PackageJob;
 import com.deployhub.job.repository.PackageJobRepository;
+import com.deployhub.job.service.PackagePurgeService.LocalDir;
 import com.deployhub.job.service.PackagePurgeService.PurgeResult;
 import java.time.Duration;
 import java.time.Instant;
@@ -109,12 +110,12 @@ public class PackageCleanupService {
                 localCleaned.add(job.getVersionName());
                 continue;
             }
-            Boolean deleted = runQuietly(
+            LocalDir localDir = runQuietly(
                     job, failed, () -> packagePurgeService.purgeLocal(job.getVersionName(), trigger, job.getFinishedAt()));
-            if (Boolean.TRUE.equals(deleted)) {
+            if (localDir == LocalDir.DELETED) {
                 localCleaned.add(job.getVersionName());
-            } else if (deleted != null) {
-                failed.add(job.getVersionName()); // false는 삭제 실패만 뜻한다 — 재실행 감지는 예외로 온다
+            } else if (localDir == LocalDir.FAILED) {
+                failed.add(job.getVersionName()); // 재실행 감지는 예외로 오고, ABSENT는 지울 게 없던 것뿐이다
             }
         }
 
@@ -145,9 +146,9 @@ public class PackageCleanupService {
             if (result.folderDeleted()) {
                 sharePointCleaned.add(job.getVersionName());
             }
-            if (!result.localDeleted()) {
+            if (result.localDir() == LocalDir.FAILED) {
                 failed.add(job.getVersionName()); // 다음 배치에서 재시도한다
-            } else if (!localCleaned.contains(job.getVersionName())) {
+            } else if (result.localDir() == LocalDir.DELETED && !localCleaned.contains(job.getVersionName())) {
                 localCleaned.add(job.getVersionName());
             }
         }
@@ -177,9 +178,9 @@ public class PackageCleanupService {
         // 실제로 지운 것만 보고한다 — 과장하면 운영자가 상태를 오판한다.
         return PackageCleanupResponse.builder()
                 .dryRun(false)
-                .localCleaned(result.localDeleted() ? List.of(versionName) : List.of())
+                .localCleaned(result.localDir() == LocalDir.DELETED ? List.of(versionName) : List.of())
                 .sharePointCleaned(result.folderDeleted() ? List.of(versionName) : List.of())
-                .failed(result.localDeleted() ? List.of() : List.of(versionName))
+                .failed(result.localDir() == LocalDir.FAILED ? List.of(versionName) : List.of())
                 .build();
     }
 

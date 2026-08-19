@@ -78,11 +78,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         registerAndSubmitSubVersion("2026.10.02", "pips", "1.0.0", null); // 직전과 동일 → 미변경
         registerAndSubmitSubVersion("2026.10.02", "api", "2.0.0", null); // 신규 → 변경
 
-        ResponseEntity<String[]> changed = restTemplate.getForEntity(
-                "/api/main-versions/{versionName}/changed-components", String[].class, "2026.10.02");
-        assertThat(changed.getBody()).containsExactly("api:2.0.0");
-
-        ResponseEntity<PackageJobDetailResponse> created = createPackageJob("2026.10.02", null, "tester", false);
+        ResponseEntity<PackageJobDetailResponse> created = createPackageJob("2026.10.02", null, false);
         assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(created.getBody().items()).extracting(PackageItemResponse::imageTag).containsExactly("api:2.0.0");
 
@@ -111,7 +107,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         // 선택 범위는 "변경분"이 아니라 "메인버전의 전체 컴포넌트"다 — 기본값에 없는 미변경분만
         // 골라도 통과해야 한다. 변경분(api:2.0.0)이 함께 딸려 들어가서도 안 된다.
         ResponseEntity<PackageJobDetailResponse> created =
-                createPackageJob("2026.10.42", List.of("pips:1.0.0"), "tester", false);
+                createPackageJob("2026.10.42", List.of("pips:1.0.0"), false);
 
         assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(created.getBody().items())
@@ -127,7 +123,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         registerMainVersion("2026.10.12");
         registerAndSubmitSubVersion("2026.10.12", "pips", "1.0.0", null); // 완전히 동일
 
-        ResponseEntity<String> response = createPackageJobRaw("2026.10.12", null, "tester", false);
+        ResponseEntity<String> response = createPackageJobRaw("2026.10.12", null, false);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).contains("E-0303");
@@ -135,7 +131,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         // 거부 기준은 "변경분 0건"이 아니라 "선택 0건"이다 — 변경분이 하나도 없어도
         // 호출측이 직접 지정하면 반입할 수 있어야 한다.
         ResponseEntity<PackageJobDetailResponse> explicit =
-                createPackageJob("2026.10.12", List.of("pips:1.0.0"), "tester", false);
+                createPackageJob("2026.10.12", List.of("pips:1.0.0"), false);
 
         assertThat(explicit.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(explicit.getBody().items())
@@ -149,7 +145,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         // registerAndSubmitSubVersion을 쓰지 않고 PENDING으로 등록해 확인 대기 상태를 만든다.
         putSubVersion("2026.10.21", new SubVersionUpsertRequest("pips", "1.0.0", null, 1, SubmitStatus.PENDING, null));
 
-        ResponseEntity<String> response = createPackageJobRaw("2026.10.21", null, "tester", false);
+        ResponseEntity<String> response = createPackageJobRaw("2026.10.21", null, false);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(response.getBody()).contains("E-0305");
@@ -161,23 +157,37 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         registerAndSubmitSubVersion("2026.10.31", "pips", "1.0.0", null);
 
         ResponseEntity<String> unknownTag =
-                createPackageJobRaw("2026.10.31", List.of("not-exist:1.0"), "tester", false);
+                createPackageJobRaw("2026.10.31", List.of("not-exist:1.0"), false);
         assertThat(unknownTag.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(unknownTag.getBody()).contains("E-0301");
 
         ResponseEntity<String> duplicateTag =
-                createPackageJobRaw("2026.10.31", List.of("pips:1.0.0", "pips:1.0.0"), "tester", false);
+                createPackageJobRaw("2026.10.31", List.of("pips:1.0.0", "pips:1.0.0"), false);
         assertThat(duplicateTag.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(duplicateTag.getBody()).contains("E-0301");
+    }
+
+    @Test
+    void 파일명이_겹치는_태그_조합은_E_0301로_거부된다() {
+        // tar 파일명은 '/'·':'를 '_'로 치환해 만든다 — 치환이 단사가 아니라 "a/b:1"과 "a_b:1"이
+        // 같은 이름이 된다. 두 항목은 같은 폴더에 병렬로 내려받으므로 여기서 막지 않으면
+        // 한쪽이 다른 쪽을 덮어쓴 채 고객사로 나간다.
+        registerMainVersion("2026.10.33");
+        registerAndSubmitSubVersion("2026.10.33", "dup", "1.0.0", List.of("a/b:1", "a_b:1"));
+
+        ResponseEntity<String> collided = createPackageJobRaw("2026.10.33", List.of("a/b:1", "a_b:1"), false);
+
+        assertThat(collided.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(collided.getBody()).contains("E-0301");
     }
 
     @Test
     void DONE_Job은_차단되고_FAILED_Job은_재실행이_허용된다() {
         registerMainVersion("2026.11.01");
         registerAndSubmitSubVersion("2026.11.01", "pips", "1.0.0", null);
-        insertPackageJob("2026.11.01", "DONE", "https://contoso.sharepoint.com/2026.11.01", null, "tester");
+        insertPackageJob("2026.11.01", "DONE", "https://contoso.sharepoint.com/2026.11.01", null);
 
-        ResponseEntity<String> blocked = createPackageJobRaw("2026.11.01", null, "tester", false);
+        ResponseEntity<String> blocked = createPackageJobRaw("2026.11.01", null, false);
         assertThat(blocked.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(blocked.getBody()).contains("E-0302");
         // 구현계획서 402행 — 차단 응답이 기존 Job 정보(공유 링크)를 실어야 호출측이
@@ -186,7 +196,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
 
         jdbcTemplate.update("UPDATE package_job SET status = 'FAILED' WHERE version_name = ?", "2026.11.01");
 
-        ResponseEntity<PackageJobDetailResponse> retried = createPackageJob("2026.11.01", null, "retrier", false);
+        ResponseEntity<PackageJobDetailResponse> retried = createPackageJob("2026.11.01", null, false);
         assertThat(retried.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(retried.getBody().job().status()).isEqualTo("PENDING");
     }
@@ -196,7 +206,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         registerMainVersion("2026.11.11");
         registerAndSubmitSubVersion("2026.11.11", "pips", "1.0.0", null);
         String folderUrl = "https://contoso.sharepoint.com/2026.11.11";
-        insertPackageJob("2026.11.11", "DONE", folderUrl, null, "original-user");
+        insertPackageJob("2026.11.11", "DONE", folderUrl, null);
         // API로 먼저 조회해 비교 기준을 잡는다 — JDBC 직접 조회(java.sql.Timestamp)와
         // Hibernate의 Instant 매핑은 MySQL DATETIME(타임존 정보 없음)을 변환하는 경로가
         // 달라 값이 갈릴 수 있다. 같은 경로(API 응답)로 얻은 값끼리만 비교해야 안전하다.
@@ -206,15 +216,14 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
                 .job()
                 .createdAt();
 
-        ResponseEntity<PackageJobDetailResponse> forced = createPackageJob("2026.11.11", null, "new-user", true);
+        ResponseEntity<PackageJobDetailResponse> forced = createPackageJob("2026.11.11", null, true);
 
         assertThat(forced.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(forced.getBody().job().status()).isEqualTo("PENDING");
         assertThat(forced.getBody().job().spFolderUrl()).isEqualTo(folderUrl);
         assertThat(forced.getBody().job().finishedAt()).isNull();
-        // createdBy는 재실행 요청자로 바뀌지만 createdAt(최초 생성 시각)은 그대로다 —
-        // 컬럼이 updatable=false라 resetForRerun이 건드리면 응답과 DB가 어긋난다.
-        assertThat(forced.getBody().job().createdBy()).isEqualTo("new-user");
+        // createdAt(최초 생성 시각)은 재생성해도 그대로다 — 컬럼이 updatable=false라
+        // resetForRerun이 건드리면 응답과 DB가 어긋난다.
         assertThat(forced.getBody().job().createdAt()).isEqualTo(originalCreatedAt);
     }
 
@@ -222,9 +231,9 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
     void 진행_중인_Job은_force로도_차단된다() {
         registerMainVersion("2026.11.21");
         registerAndSubmitSubVersion("2026.11.21", "pips", "1.0.0", null);
-        insertPackageJob("2026.11.21", "DOWNLOADING", null, null, "tester");
+        insertPackageJob("2026.11.21", "DOWNLOADING", null, null);
 
-        ResponseEntity<String> response = createPackageJobRaw("2026.11.21", null, "tester", true);
+        ResponseEntity<String> response = createPackageJobRaw("2026.11.21", null, true);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(response.getBody()).contains("E-0302");
@@ -241,7 +250,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         Runnable task = () -> {
             try {
                 barrier.await();
-                ResponseEntity<String> response = createPackageJobRaw("2026.11.31", null, "tester", false);
+                ResponseEntity<String> response = createPackageJobRaw("2026.11.31", null, false);
                 if (response.getStatusCode() == HttpStatus.CREATED) {
                     successCount.incrementAndGet();
                 }
@@ -269,7 +278,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         // (오래된) FAILED 상태를 보고 통과할 수 있다 — 이 테스트가 그 경로를 잡는다.
         registerMainVersion("2026.11.32");
         registerAndSubmitSubVersion("2026.11.32", "pips", "1.0.0", null);
-        insertPackageJob("2026.11.32", "FAILED", null, null, "tester");
+        insertPackageJob("2026.11.32", "FAILED", null, null);
 
         int threadCount = 2;
         CyclicBarrier barrier = new CyclicBarrier(threadCount);
@@ -277,7 +286,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         Runnable task = () -> {
             try {
                 barrier.await();
-                ResponseEntity<String> response = createPackageJobRaw("2026.11.32", null, "tester", false);
+                ResponseEntity<String> response = createPackageJobRaw("2026.11.32", null, false);
                 if (response.getStatusCode() == HttpStatus.CREATED) {
                     successCount.incrementAndGet();
                 }
@@ -302,9 +311,9 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         // 중이던 Job은 재기동하면 사라진다. 빠뜨리면 그 메인버전은 force로도 영원히
         // 복구 불가능해진다(OrphanJobCleaner 클래스 javadoc 참고).
         registerMainVersion("2026.12.01");
-        insertPackageJob("2026.12.01", "DOWNLOADING", null, null, "tester");
+        insertPackageJob("2026.12.01", "DOWNLOADING", null, null);
         registerMainVersion("2026.12.02");
-        insertPackageJob("2026.12.02", "PENDING", null, null, "tester");
+        insertPackageJob("2026.12.02", "PENDING", null, null);
 
         orphanJobCleaner.run(new DefaultApplicationArguments());
 
@@ -336,30 +345,29 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
     }
 
     private ResponseEntity<PackageJobDetailResponse> createPackageJob(
-            String versionName, List<String> imageTags, String createdBy, boolean force) {
+            String versionName, List<String> imageTags, boolean force) {
         return restTemplate.postForEntity(
                 "/api/main-versions/{versionName}/package-job",
-                new PackageJobCreateRequest(imageTags, createdBy, force),
+                new PackageJobCreateRequest(imageTags, force),
                 PackageJobDetailResponse.class,
                 versionName);
     }
 
     private ResponseEntity<String> createPackageJobRaw(
-            String versionName, List<String> imageTags, String createdBy, boolean force) {
+            String versionName, List<String> imageTags, boolean force) {
         return restTemplate.postForEntity(
                 "/api/main-versions/{versionName}/package-job",
-                new PackageJobCreateRequest(imageTags, createdBy, force),
+                new PackageJobCreateRequest(imageTags, force),
                 String.class,
                 versionName);
     }
 
-    private void insertPackageJob(String versionName, String status, String folderUrl, String folderId, String createdBy) {
+    private void insertPackageJob(String versionName, String status, String folderUrl, String folderId) {
         jdbcTemplate.update(
-                "INSERT INTO package_job (version_name, status, created_by, sp_folder_url, sp_folder_id) "
-                        + "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO package_job (version_name, status, sp_folder_url, sp_folder_id) "
+                        + "VALUES (?, ?, ?, ?)",
                 versionName,
                 status,
-                createdBy,
                 folderUrl,
                 folderId);
     }
