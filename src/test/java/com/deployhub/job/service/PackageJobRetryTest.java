@@ -118,8 +118,7 @@ class PackageJobRetryTest {
                 componentRepository,
                 versionComparisonService,
                 packagingEligibilityService,
-                workDir.toString(),
-                0L);
+                workDir.toString());
     }
 
     private static PackageJob newJob(JobStatus status) {

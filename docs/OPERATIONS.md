@@ -14,14 +14,13 @@
 |---|---|---|
 | `WORK_DIR` | `/data/deployhub/jobs` | 아카이브가 쌓이는 곳. 디스크 여유의 기준이다 |
 | `NCR_ENDPOINT`·`NCR_ACCESS_KEY`·`NCR_SECRET_KEY` | — | 비어 있으면 **기동 실패**(`@NotBlank`) |
-| `GRAPH_TENANT_ID`·`GRAPH_CLIENT_ID`·`GRAPH_CLIENT_SECRET`·`SP_SITE_ID` | — | 동일 |
+| `GRAPH_TENANT_ID`·`GRAPH_CLIENT_ID` | — | 동일 |
 | `NCR_CLI_PATH` | `/usr/bin/skopeo` | 실행 불가면 기동 실패(E-0605) |
 | `STARTUP_CHECKS_ENABLED` | `true` | 끄면 NCR 도달성·skopeo·tar 점검을 건너뛴다. 운영에서 끄지 말 것 |
 | `SWAGGER_ENABLED` | `true` | 운영에서는 끄거나 nginx로 내부 IP만 허용 |
 | `CORS_ALLOWED_ORIGINS` | — | 프론트엔드 **브라우저 주소창**의 오리진이다(이 백엔드 IP가 아니다). 스킴 필수, 포트 와일드카드는 `:[*]` |
 | `UPLOAD_CHUNK_SIZE` | `10485760` | 320 KiB의 양의 배수 + 60 MiB 이하만 허용. 아니면 기동 실패(E-1108) |
 | `JOB_CONCURRENCY` | `3` | 동시 Job 수. skopeo 프로세스는 최대 `JOB_CONCURRENCY × DOWNLOAD_CONCURRENCY`개까지 뜬다 |
-| `MIN_FREE_DISK_BYTES` | `53687091200` (50GB) | 확정 시점 여유 공간 경고 기준 |
 | `RETENTION_DAYS` | `90` | SharePoint 폴더 보존 기간. **1 미만이면 기동 실패** |
 | `RETENTION_COUNT` | `10` | 기한이 지나도 보호할 최근 건수. 음수면 기동 실패 |
 | `LOCAL_CLEANUP_DELAY_HOURS` | `24` | 업로드 완료 후 작업 디렉터리 삭제 유예 |
@@ -82,7 +81,7 @@ curl -X DELETE 'localhost:8080/api/package-jobs/2026.08.05/package'
 
 | 코드 | 원인 | 대응 |
 |---|---|---|
-| (기동 실패) | `NCR_*`/`GRAPH_*`/`SP_SITE_ID` 누락 | `@NotBlank` 검증이다. `.env` 확인 |
+| (기동 실패) | `NCR_*`/`GRAPH_TENANT_ID`/`GRAPH_CLIENT_ID` 누락 | `@NotBlank` 검증이다. `.env` 확인 |
 | E-0605 | skopeo 실행 불가 | `NCR_CLI_PATH` 확인. 컨테이너 이미지에는 포함돼 있다 |
 | E-0404 | NCR에 연결 불가 | 아래 "NCR 도달성" 참고 |
 | E-1108 | `UPLOAD_CHUNK_SIZE`가 320 KiB 배수가 아님 | 값 수정 |
@@ -94,7 +93,6 @@ curl -X DELETE 'localhost:8080/api/package-jobs/2026.08.05/package'
 |---|---|---|
 | E-0204 | 진행 중이거나 완료된 메인버전의 매니페스트 수정 시도 | 정상 차단. `FAILED`만 수정 가능 |
 | E-0302 | 이미 Job이 있음 | 재생성하려면 `force=true` |
-| E-0304 | 작업 디렉터리 여유 공간 부족 | 정리 배치를 수동 실행하거나 `MIN_FREE_DISK_BYTES` 재검토 |
 | E-0305 | `PENDING` 담당 영역 잔존 | 해당 영역의 Release History 제출을 기다린다 |
 | E-0401 | 레지스트리 인증 실패 | 액세스키 확인. **단 사내망 차단도 이 증상으로 보일 수 있다** |
 | E-0402·E-0404 | 레지스트리 타임아웃·연결 불가 | 네트워크. 아래 참고 |

@@ -56,12 +56,9 @@ deployhub:
     verify-on-register: ${REGISTRY_VERIFY_ON_REGISTER:true}
 
   # Microsoft Graph / OneDrive. SP_DRIVE_ID를 비우면 로그인한 계정의 기본 드라이브를 조회해 쓴다.
-  # 위임(delegated) 인증에서는 client-secret·site-id를 쓰지 않는다(app-only 복귀 대비로만 남김).
   sharepoint:
     tenant-id: ${GRAPH_TENANT_ID:}
     client-id: ${GRAPH_CLIENT_ID:}
-    client-secret: ${GRAPH_CLIENT_SECRET:}
-    site-id: ${SP_SITE_ID:}
     drive-id: ${SP_DRIVE_ID:}
     root-path: ${SP_ROOT_PATH:/Deploy/Packages}
     # 위임 인증용 refresh token 보관 파일. 최초 1회 device code 흐름으로 채워 넣는다.
@@ -74,11 +71,9 @@ deployhub:
     max-retries: ${MAX_RETRY:3}
     backoff: ${RETRY_BACKOFF:5s,15s,45s}
 
-  # Job 오케스트레이션. min-free-disk-bytes는 확정 시점의 경고 기준(기본 50GiB)일 뿐이고,
-  # 실제 필요 용량은 다운로드 단계가 매니페스트 크기로 따로 판정한다.
+  # Job 오케스트레이션. 필요 용량은 다운로드 단계가 매니페스트 크기로 판정한다.
   job:
     concurrency: ${JOB_CONCURRENCY:3}
-    min-free-disk-bytes: ${MIN_FREE_DISK_BYTES:53687091200}
 
   # 매니페스트 조회 동시 요청 상한. manifestExecutor 풀 크기와 검증 배치 크기가 이 값 하나를
   # 공유한다(NCR 전체가 나눠 쓰는 전역 상한). 튜닝 대상이 아니라 placeholder를 두지 않았을 뿐,

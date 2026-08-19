@@ -48,8 +48,8 @@ public class PackageJobController {
     @Operation(summary = "매니페스트 확정 + Job 생성 (FN-03, FN-11 중복방지)")
     @ApiResponse(responseCode = "400", description = "E-0301: 잘못된/중복 image_tag, E-0303: 패키징 대상 없음")
     @ApiResponse(responseCode = "404", description = "E-0101: 메인버전 없음")
-    @ApiResponse(responseCode = "409", description = "E-0302: 중복 Job, E-0304: 디스크 부족" +
-            ", E-0305: PENDING 담당 영역 존재 또는 서브버전 0건, E-1301: 동시 요청 충돌")
+    @ApiResponse(responseCode = "409", description = "E-0302: 중복 Job"
+            + ", E-0305: PENDING 담당 영역 존재 또는 서브버전 0건, E-1301: 동시 요청 충돌")
     @ApiResponse(responseCode = "503", description = "E-1502: 실행 대기열 포화")
     @PostMapping("/api/main-versions/{versionName}/package-job")
     public ResponseEntity<PackageJobDetailResponse> createPackageJob(

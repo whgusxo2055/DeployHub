@@ -36,8 +36,6 @@ public enum ErrorCode {
             "E-0301", HttpStatus.BAD_REQUEST, "선택한 image_tag가 메인버전에 없거나 목록 내에 중복됩니다."),
     DUPLICATE_PACKAGE_JOB("E-0302", HttpStatus.CONFLICT, "이미 진행 중이거나 완료된 패키지 Job이 있습니다."),
     NO_PACKAGING_TARGET("E-0303", HttpStatus.BAD_REQUEST, "패키징할 대상이 없습니다."),
-    INSUFFICIENT_DISK_SPACE(
-            "E-0304", HttpStatus.CONFLICT, "작업 디렉터리의 여유 공간이 부족합니다. force=true로 진행할 수 있습니다."),
     PACKAGING_BLOCKED_BY_PENDING(
             "E-0305", HttpStatus.CONFLICT, "제출 대기(PENDING) 상태인 담당 영역이 있어 패키징을 시작할 수 없습니다."),
     PACKAGE_JOB_NOT_FOUND("E-0306", HttpStatus.NOT_FOUND, "패키지 Job을 찾을 수 없습니다."),

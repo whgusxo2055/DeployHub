@@ -17,7 +17,7 @@ public record PackageJobCreateRequest(
         List<@NotBlank @Size(max = 200) String> imageTags,
         @Schema(
                         description =
-                                "true면 완료된(DONE) Job을 초기화해 재생성하고, 디스크 여유 공간 부족 경고도 함께 우회한다. "
+                                "true면 완료된(DONE) Job을 초기화해 재생성한다. "
                                         + "진행 중인 Job은 force로도 뚫지 않는다")
                 boolean force)
         implements ValidatedRequest {

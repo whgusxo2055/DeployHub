@@ -55,7 +55,6 @@ public class PackageJobService {
     private final VersionComparisonService versionComparisonService;
     private final PackagingEligibilityService packagingEligibilityService;
     private final String workDir;
-    private final long minFreeDiskBytes;
 
     public PackageJobService(
             PackageJobRepository packageJobRepository,
@@ -64,8 +63,7 @@ public class PackageJobService {
             ComponentRepository componentRepository,
             VersionComparisonService versionComparisonService,
             PackagingEligibilityService packagingEligibilityService,
-            @Value("${deployhub.work-dir}") String workDir,
-            @Value("${deployhub.job.min-free-disk-bytes}") long minFreeDiskBytes) {
+            @Value("${deployhub.work-dir}") String workDir) {
         this.packageJobRepository = packageJobRepository;
         this.packageItemRepository = packageItemRepository;
         this.mainVersionRepository = mainVersionRepository;
@@ -73,7 +71,6 @@ public class PackageJobService {
         this.versionComparisonService = versionComparisonService;
         this.packagingEligibilityService = packagingEligibilityService;
         this.workDir = workDir;
-        this.minFreeDiskBytes = minFreeDiskBytes;
     }
 
     /** 매니페스트 확정. 순서 고정 — 찌꺼기 행을 남기지 않도록 검증을 전부 마친 뒤에야 package_item을 재생성한다. */
@@ -101,9 +98,6 @@ public class PackageJobService {
         }
         assertTargetTagsValid(versionName, targetTags);
 
-        // 락보다 먼저 한다 — 락을 쥔 채 파일시스템 I/O를 하면 WORK_DIR이 네트워크 스토리지일 때
-        // DB 커넥션과 행 락이 무기한 묶인다.
-        checkDiskSpace(request.force());
         PackageJob job = resolveJob(versionName, request.force());
 
         packageItemRepository.deleteByVersionName(versionName);
@@ -330,32 +324,4 @@ public class PackageJobService {
         return e;
     }
 
-    /**
-     * 설정된 여유 공간 기준값과만 비교한다(실제 소요량 기준 차단은 다운로드 단계가 따로 한다).
-     * force=false면 409로 막고, force=true는 사용자가 확인한 것으로 보고 진행한다.
-     * 디렉터리 생성이 실패하면 검사만 건너뛴다 — 그 실패로 확정 전체가 막혀선 안 된다.
-     */
-    private void checkDiskSpace(boolean force) {
-        File dir = new File(workDir);
-        if (!dir.exists() && !dir.mkdirs()) {
-            log.warn("작업 디렉터리를 만들 수 없어 디스크 여유 공간 확인을 건너뜁니다: {}", workDir);
-            return;
-        }
-
-        long usableBytes = dir.getUsableSpace();
-        if (usableBytes >= minFreeDiskBytes) {
-            return;
-        }
-        // 경로·여유 용량은 인프라 정보라 무인증 API 응답에 싣지 않는다 — 로그에만 남긴다.
-        log.warn(
-                "디스크 여유 공간 부족: workDir={}, usable={} bytes, threshold={} bytes, force={}",
-                workDir,
-                usableBytes,
-                minFreeDiskBytes,
-                force);
-        if (!force) {
-            // 경로·용량은 위 로그에만 남긴다 — details로도 인프라 정보를 내보내지 않는다.
-            throw new ApiException(ErrorCode.INSUFFICIENT_DISK_SPACE);
-        }
-    }
 }
