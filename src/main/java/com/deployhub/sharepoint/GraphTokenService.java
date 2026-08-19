@@ -30,7 +30,6 @@ import org.springframework.web.client.RestClientResponseException;
  *
  * <p><b>public client 흐름이라 {@code client_secret}을 보내지 않는다</b> — device code로 최초 1회
  * 로그인해 얻은 refresh token을 파일에 두고 그것만으로 갱신한다.
- * {@code GraphProperties.clientSecret}은 회사 테넌트(app-only) 복귀를 대비해 남겨둔 미사용 값이다.
  */
 @Slf4j
 @Service

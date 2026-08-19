@@ -27,15 +27,6 @@ public interface ComponentRepository extends JpaRepository<Component, ComponentI
             """)
     List<Component> findByMainVersionName(@Param("mainVersionName") String mainVersionName);
 
-    /** 목록의 componentCount 집계용. */
-    @Query("""
-            SELECT COUNT(c) FROM Component c
-            WHERE c.subVersionId IN (
-                SELECT sv.id FROM SubVersion sv WHERE sv.mainVersionName = :mainVersionName
-            )
-            """)
-    long countByMainVersionName(@Param("mainVersionName") String mainVersionName);
-
     /** 목록 조회용 일괄 집계 — 항목마다 count를 치면 page size에 비례해 쿼리가 는다. */
     @Query("""
             SELECT new com.deployhub.version.repository.VersionCount(sv.mainVersionName, COUNT(c))

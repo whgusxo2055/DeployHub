@@ -32,7 +32,7 @@ import org.springframework.web.client.RestClient;
 class GraphApiClientTest {
 
     private static final GraphProperties PROPERTIES =
-            new GraphProperties("tenant", "client", "secret", "site-1", null, "/Deploy/Packages");
+            new GraphProperties("tenant", "client", null, "/Deploy/Packages");
 
     private MockRestServiceServer server;
     private GraphTokenService tokenService;

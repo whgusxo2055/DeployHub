@@ -28,5 +28,3 @@ deployhub:
   sharepoint:
     tenant-id: ${GRAPH_TENANT_ID:placeholder}
     client-id: ${GRAPH_CLIENT_ID:placeholder}
-    client-secret: ${GRAPH_CLIENT_SECRET:placeholder}
-    site-id: ${SP_SITE_ID:placeholder}

@@ -33,7 +33,7 @@ class GraphTokenServiceTest {
 
     private static final String TOKEN_URL = "https://login.microsoftonline.com/tenant/oauth2/v2.0/token";
     private static final GraphProperties PROPERTIES =
-            new GraphProperties("tenant", "client", "secret", "site", null, "/Deploy/Packages");
+            new GraphProperties("tenant", "client", null, "/Deploy/Packages");
 
     @TempDir
     Path tempDir;

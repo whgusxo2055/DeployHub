@@ -29,7 +29,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * 검증할 화면이 없다 (구현계획서 0.1절). 대신 Phase 1 완료 기준(구현계획서 328-334행)에
  * 명시된 핵심 흐름들을 실제 MySQL 컨테이너 위에서({@link MySqlContainerSupport}) HTTP
  * 엔드투엔드로 검증한다. 변경 여부 계산 로직 자체는
- * {@link com.deployhub.version.service.ChangeDetectorTest} 단위 테스트가 이미 덮으므로
+ * {@link com.deployhub.version.service.VersionComparisonServiceTest}가 이미 덮으므로
  * 여기서 다시 검증하지 않는다.
  */
 class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {

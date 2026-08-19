@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
@@ -75,7 +76,8 @@ public class VersionComparisonService {
         Map<Long, SubVersionChange> result = new LinkedHashMap<>();
         for (SubVersion subVersion : currentSubVersions) {
             SubVersion previousSubVersion = previousSubVersionsByCode.get(subVersion.getCode());
-            boolean subVersionChanged = ChangeDetector.isSubVersionChanged(
+            // 직전에 같은 code가 없으면(신규이거나 최초 메인버전) 변경으로 본다 — Objects.equals가 그대로 처리한다.
+            boolean subVersionChanged = !Objects.equals(
                     subVersion.getVersion(), previousSubVersion == null ? null : previousSubVersion.getVersion());
 
             Set<String> previousTags = previousImageTagsByCode.getOrDefault(subVersion.getCode(), Set.of());
@@ -83,8 +85,8 @@ public class VersionComparisonService {
 
             Map<String, Boolean> componentChanges = new LinkedHashMap<>();
             for (Component component : components) {
-                componentChanges.put(
-                        component.getImageTag(), ChangeDetector.isComponentChanged(component.getImageTag(), previousTags));
+                // version이 같아도 태그 구성이 달라졌으면 변경이라 서브버전 판정과 독립이다.
+                componentChanges.put(component.getImageTag(), !previousTags.contains(component.getImageTag()));
             }
             result.put(subVersion.getId(), new SubVersionChange(subVersionChanged, componentChanges));
         }

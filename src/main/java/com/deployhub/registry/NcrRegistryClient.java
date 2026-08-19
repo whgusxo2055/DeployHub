@@ -40,11 +40,8 @@ public class NcrRegistryClient {
 
     // OCI digest 문법(algorithm ":" encoded) — '/', '.', '?', '#', '{', '%'가 원천 배제된다.
     private static final Pattern DIGEST = Pattern.compile("[a-z0-9]+([.+_-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,}");
-    private static final Pattern PARAM = Pattern.compile("^(\\w+)\\s*=\\s*\"([^\"]*)\"$");
-    private static final Pattern BEARER_SCHEME = Pattern.compile("(?i)^bearer\\b\\s*(.*)$");
-    // 따옴표 안의 콤마는 챌린지 구분자로 보지 않는다 (WWW-Authenticate가 여러 scheme을
-    // 콤마로 이어붙일 수 있다: `Bearer realm="...", Basic realm="..."`).
-    private static final Pattern SPLIT_OUTSIDE_QUOTES = Pattern.compile(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
+    private static final Pattern BEARER_SCHEME = Pattern.compile("(?i)\\bbearer\\b");
+    private static final Pattern PARAM = Pattern.compile("(\\w+)\\s*=\\s*\"([^\"]*)\"");
 
     // Boot 빈이 아니라 기본 설정 매퍼를 쓴다 — 미지의 필드에 실패하는 엄격 모드가 의도다(TokenResponse 참고).
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
@@ -286,15 +283,6 @@ public class NcrRegistryClient {
         }
     }
 
-    private String doGet(String path, String authorizationHeader) {
-        return restClient
-                .get()
-                .uri(path)
-                .header(HttpHeaders.AUTHORIZATION, authorizationHeader)
-                .retrieve()
-                .body(String.class);
-    }
-
     private String basicAuthHeader() {
         String raw = properties.accessKey() + ":" + properties.secretKey();
         return "Basic " + Base64.getEncoder().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
@@ -389,42 +377,21 @@ public class NcrRegistryClient {
     }
 
     /**
-     * Bearer challenge에 속한 파라미터만 추출한다. 헤더 하나에 여러 scheme이 이어질 수 있어
-     * 전체에 정규식을 돌리면 뒤 scheme의 realm이 앞을 덮어써 엉뚱한 호스트로 자격 증명이 간다.
+     * Bearer challenge의 파라미터. 앞선 scheme(`Basic realm="..."` 등)의 값을 realm으로 잘못
+     * 집지 않도록 Bearer 지점부터 훑고, 뒤따르는 scheme이 같은 이름을 다시 쓰면 먼저 온 값을 남긴다.
+     * 오파싱해도 realm 호스트 검사가 자격 증명 유출을 막지만, 그때 인증이 통째로 실패한다.
      */
     private static Map<String, String> parseBearerChallengeParams(String header) {
-        String[] segments = SPLIT_OUTSIDE_QUOTES.split(header);
-        Map<String, String> params = new LinkedHashMap<>();
-        int start = -1;
-        for (int i = 0; i < segments.length; i++) {
-            Matcher schemeMatcher = BEARER_SCHEME.matcher(segments[i].trim());
-            if (schemeMatcher.matches()) {
-                start = i;
-                String remainder = schemeMatcher.group(1);
-                if (!remainder.isBlank()) {
-                    tryAddParam(params, remainder);
-                }
-                break;
-            }
-        }
-        if (start == -1) {
+        Matcher scheme = BEARER_SCHEME.matcher(header);
+        if (!scheme.find()) {
             return Map.of();
         }
-        for (int i = start + 1; i < segments.length; i++) {
-            if (!tryAddParam(params, segments[i].trim())) {
-                break; // 다음 scheme(challenge)의 시작 - 여기서 멈춘다.
-            }
+        Map<String, String> params = new LinkedHashMap<>();
+        Matcher param = PARAM.matcher(header).region(scheme.end(), header.length());
+        while (param.find()) {
+            params.putIfAbsent(param.group(1), param.group(2));
         }
         return params;
-    }
-
-    private static boolean tryAddParam(Map<String, String> params, String segment) {
-        Matcher matcher = PARAM.matcher(segment);
-        if (!matcher.matches()) {
-            return false;
-        }
-        params.put(matcher.group(1), matcher.group(2));
-        return true;
     }
 
     // NCR이 expires_in/issued_at도 함께 주는데 OBJECT_MAPPER가 엄격 모드라 이게 없으면 파싱이 깨진다.

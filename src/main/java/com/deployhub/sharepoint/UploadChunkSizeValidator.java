@@ -6,7 +6,8 @@ import org.springframework.stereotype.Component;
 /**
  * 업로드 청크 크기를 기동 시점에 검증한다. {@code StartupChecks}에 넣지 않는 이유는 그게
  * dev 프로필에서 꺼지는데 이 값은 외부 연동과 무관한 순수 설정값이라 꺼질 이유가 없어서다.
- * 기동 실패라는 부작용만을 위한 빈이라 {@link GraphUploadService}는 같은 프로퍼티를 따로 주입받는다.
+ * 기동 실패라는 부작용만을 위한 빈이라 {@link GraphUploadService}는 같은 프로퍼티를 따로 주입받는다 —
+ * 그 분리 덕분에 업로드 테스트가 작은 청크(수십 바이트)로 서비스를 만들어 분할 전송을 검증할 수 있다.
  */
 @Component
 public class UploadChunkSizeValidator {
