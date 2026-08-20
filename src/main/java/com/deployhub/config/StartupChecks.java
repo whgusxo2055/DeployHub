@@ -1,6 +1,6 @@
 package com.deployhub.config;
 
-import com.deployhub.common.ItemErrorCode;
+import com.deployhub.common.ErrorCode;
 import com.deployhub.registry.NcrProperties;
 import com.deployhub.registry.NcrRegistryClient;
 import com.deployhub.sharepoint.GraphApiClient;
@@ -41,7 +41,7 @@ public class StartupChecks implements ApplicationRunner {
         if (ncrProperties.cliPath().contains("/") || ncrProperties.cliPath().contains("\\")) {
             if (!Files.isExecutable(Path.of(ncrProperties.cliPath()))) {
                 throw new IllegalStateException("%s: skopeo 실행 파일을 찾을 수 없거나 실행 권한이 없습니다: %s"
-                        .formatted(ItemErrorCode.SKOPEO_NOT_EXECUTABLE.getCode(), ncrProperties.cliPath()));
+                        .formatted(ErrorCode.SKOPEO_NOT_EXECUTABLE.getCode(), ncrProperties.cliPath()));
             }
         }
         log.info("skopeo 확인 완료.");

@@ -11,7 +11,6 @@ import static org.mockito.Mockito.when;
 
 import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
-import com.deployhub.common.ItemErrorCode;
 import com.deployhub.registry.ImageTagChecker;
 import com.deployhub.registry.ImageTagChecker.TagCheck;
 import com.deployhub.registry.NcrRegistryClient.ManifestInfo;
@@ -75,7 +74,7 @@ class SubVersionRegistryCheckTest {
     void 레지스트리에_없는_태그는_저장하지_않고_E_0206으로_거부한다() {
         when(mainVersionRepository.existsById(VERSION)).thenReturn(true);
         when(imageTagChecker.checkAll(List.of(TAG)))
-                .thenReturn(List.of(new TagCheck(TAG, null, ItemErrorCode.IMAGE_NOT_FOUND, true)));
+                .thenReturn(List.of(new TagCheck(TAG, null, ErrorCode.IMAGE_NOT_FOUND, true)));
 
         assertThatThrownBy(() -> service(true).upsert(VERSION, request()))
                 .isInstanceOf(ApiException.class)
@@ -93,7 +92,7 @@ class SubVersionRegistryCheckTest {
     void 확인_불가는_등록을_막지_않는다() {
         stubSave();
         when(imageTagChecker.checkAll(List.of(TAG)))
-                .thenReturn(List.of(new TagCheck(TAG, null, ItemErrorCode.MANIFEST_LOOKUP_TIMEOUT, false)));
+                .thenReturn(List.of(new TagCheck(TAG, null, ErrorCode.MANIFEST_LOOKUP_TIMEOUT, false)));
 
         assertThat(service(true).upsert(VERSION, request()).imageTags()).containsExactly(TAG);
         verify(subVersionWriter).save(eq(VERSION), any(), any());

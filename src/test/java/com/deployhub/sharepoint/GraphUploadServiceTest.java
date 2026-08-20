@@ -13,7 +13,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
-import com.deployhub.common.ItemErrorCode;
+import com.deployhub.common.ErrorCode;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
 import com.deployhub.job.entity.PackageItem;
@@ -371,10 +371,10 @@ class GraphUploadServiceTest {
                 .isInstanceOf(IllegalStateException.class);
 
         assertThat(item.getStatus()).isEqualTo(PackageItemStatus.FAILED);
-        // 상태 코드는 이제 error_message가 아니라 로그(detail)로 간다 — DB 문구는 ItemErrorCode가 정한다.
+        // 상태 코드는 이제 error_message가 아니라 로그(detail)로 간다 — DB 문구는 ErrorCode가 정한다.
         assertThat(item.getErrorMessage())
                 .doesNotContain("LEAKED_SESSION_TOKEN")
-                .isEqualTo(ItemErrorCode.UPLOAD_FAILED.toErrorMessage());
+                .isEqualTo(ErrorCode.UPLOAD_FAILED.toMessage());
         server.verify();
     }
 

@@ -46,7 +46,7 @@ public class GlobalExceptionHandler {
                 : logUnmappedValidationTargetAndFallBack(ex);
 
         return ResponseEntity.status(errorCode.getHttpStatus())
-                .body(ApiErrorResponse.of(errorCode, errorCode.getDefaultMessage(), details));
+                .body(ApiErrorResponse.of(errorCode, errorCode.getMessage(), details));
     }
 
     // enum 쿼리 파라미터가 유효하지 않으면 여기로 온다 — 없으면 클라이언트 실수가 500이 된다.
@@ -55,7 +55,7 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(ErrorCode.INVALID_QUERY_PARAMETER.getHttpStatus())
                 .body(ApiErrorResponse.of(
                         ErrorCode.INVALID_QUERY_PARAMETER,
-                        ErrorCode.INVALID_QUERY_PARAMETER.getDefaultMessage(),
+                        ErrorCode.INVALID_QUERY_PARAMETER.getMessage(),
                         List.of("%s: '%.100s'".formatted(ex.getName(), String.valueOf(ex.getValue())))));
     }
 
@@ -70,7 +70,7 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(ErrorCode.ENDPOINT_NOT_FOUND.getHttpStatus())
                 .body(ApiErrorResponse.of(
                         ErrorCode.ENDPOINT_NOT_FOUND,
-                        ErrorCode.ENDPOINT_NOT_FOUND.getDefaultMessage(),
+                        ErrorCode.ENDPOINT_NOT_FOUND.getMessage(),
                         List.of()));
     }
 
@@ -92,7 +92,7 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(ErrorCode.MALFORMED_REQUEST.getHttpStatus())
                 .body(ApiErrorResponse.of(
                         ErrorCode.MALFORMED_REQUEST,
-                        ErrorCode.MALFORMED_REQUEST.getDefaultMessage(),
+                        ErrorCode.MALFORMED_REQUEST.getMessage(),
                         List.of("%s: 필수 파라미터가 없습니다.".formatted(ex.getParameterName()))));
     }
 
@@ -104,7 +104,7 @@ public class GlobalExceptionHandler {
             builder.header(HttpHeaders.ALLOW, StringUtils.collectionToDelimitedString(ex.getSupportedHttpMethods(), ", "));
         }
         return builder.body(ApiErrorResponse.of(
-                ErrorCode.METHOD_NOT_ALLOWED, ErrorCode.METHOD_NOT_ALLOWED.getDefaultMessage(), List.of()));
+                ErrorCode.METHOD_NOT_ALLOWED, ErrorCode.METHOD_NOT_ALLOWED.getMessage(), List.of()));
     }
 
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
@@ -127,12 +127,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiErrorResponse> handleUnexpected(Exception ex) {
         log.error("예기치 못한 오류가 발생했습니다.", ex);
         return ResponseEntity.status(ErrorCode.INTERNAL_ERROR.getHttpStatus())
-                .body(ApiErrorResponse.of(ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.getDefaultMessage(), List.of()));
+                .body(ApiErrorResponse.of(ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.getMessage(), List.of()));
     }
 
     private static ResponseEntity<ApiErrorResponse> errorResponse(ErrorCode errorCode) {
         return ResponseEntity.status(errorCode.getHttpStatus())
-                .body(ApiErrorResponse.of(errorCode, errorCode.getDefaultMessage(), List.of()));
+                .body(ApiErrorResponse.of(errorCode, errorCode.getMessage(), List.of()));
     }
 
     private ErrorCode logUnmappedValidationTargetAndFallBack(MethodArgumentNotValidException ex) {

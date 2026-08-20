@@ -1,6 +1,6 @@
 package com.deployhub.job.service;
 
-import com.deployhub.common.ItemErrorCode;
+import com.deployhub.common.ErrorCode;
 import com.deployhub.job.entity.PackageItem;
 import com.deployhub.job.repository.PackageItemRepository;
 import com.deployhub.registry.ImageTagChecker;
@@ -47,7 +47,7 @@ public class PackageValidationService {
                     versionName,
                     item.getImageTag(),
                     check.failureCode().getCode());
-            item.markFailed(check.failureCode().toErrorMessage());
+            item.markFailed(check.failureCode());
             missing.add(item);
         }
 
@@ -55,8 +55,8 @@ public class PackageValidationService {
             packageItemRepository.saveAll(missing);
             throw new IllegalStateException("%s/%s: 존재하지 않거나 누락 간주된 항목이 %d건 있어 다운로드를 시작하지 않습니다."
                     .formatted(
-                            ItemErrorCode.IMAGE_NOT_FOUND.getCode(),
-                            ItemErrorCode.MANIFEST_LOOKUP_TIMEOUT.getCode(),
+                            ErrorCode.IMAGE_NOT_FOUND.getCode(),
+                            ErrorCode.MANIFEST_LOOKUP_TIMEOUT.getCode(),
                             missing.size()));
         }
         return context;

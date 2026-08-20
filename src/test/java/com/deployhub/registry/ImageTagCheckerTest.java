@@ -7,7 +7,6 @@ import static org.mockito.Mockito.when;
 
 import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
-import com.deployhub.common.ItemErrorCode;
 import com.deployhub.registry.ImageTagChecker.TagCheck;
 import com.deployhub.registry.NcrRegistryClient.ManifestInfo;
 import java.util.List;
@@ -43,7 +42,7 @@ class ImageTagCheckerTest {
 
         assertThat(check.found()).isFalse();
         assertThat(check.definitelyMissing()).isTrue();
-        assertThat(check.failureCode()).isEqualTo(ItemErrorCode.IMAGE_NOT_FOUND);
+        assertThat(check.failureCode()).isEqualTo(ErrorCode.IMAGE_NOT_FOUND);
     }
 
     /** 타임아웃은 "확인 불가"다 — 확실히 없음으로 올리면 레지스트리 장애가 등록 불가로 번진다. */
@@ -54,7 +53,7 @@ class ImageTagCheckerTest {
         TagCheck check = checker().checkAll(List.of(TAG)).get(0);
 
         assertThat(check.definitelyMissing()).isFalse();
-        assertThat(check.failureCode()).isEqualTo(ItemErrorCode.MANIFEST_LOOKUP_TIMEOUT);
+        assertThat(check.failureCode()).isEqualTo(ErrorCode.MANIFEST_LOOKUP_TIMEOUT);
     }
 
     /**
@@ -68,7 +67,7 @@ class ImageTagCheckerTest {
         TagCheck check = checker().checkAll(List.of(TAG)).get(0);
 
         assertThat(check.definitelyMissing()).isFalse();
-        assertThat(check.failureCode()).isEqualTo(ItemErrorCode.MANIFEST_LOOKUP_UNAVAILABLE);
+        assertThat(check.failureCode()).isEqualTo(ErrorCode.MANIFEST_LOOKUP_UNAVAILABLE);
     }
 
     /** 자격증명 문제를 "이미지 없음"으로 뭉개면 운영자가 원인을 못 찾는다 — 이것만 올린다. */
@@ -87,8 +86,8 @@ class ImageTagCheckerTest {
     void 형식_오류는_코드가_정한_문구만_남긴다() {
         TagCheck check = checker().checkAll(List.of("acme/../../v2/other:1")).get(0);
 
-        assertThat(check.failureCode()).isEqualTo(ItemErrorCode.INVALID_IMAGE_TAG);
-        assertThat(check.failureCode().toErrorMessage()).doesNotContain("acme/..");
+        assertThat(check.failureCode()).isEqualTo(ErrorCode.INVALID_IMAGE_TAG);
+        assertThat(check.failureCode().toMessage()).doesNotContain("acme/..");
     }
 
     /** PackageValidationService가 결과를 인덱스로 짝짓는다 — 순서가 밀리면 엉뚱한 항목이 실패한다. */

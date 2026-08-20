@@ -95,7 +95,7 @@ class GlobalExceptionHandlerTest {
     @Test
     void 표준_예외_응답에는_기본_문구만_실린다() throws Exception {
         mockMvc.perform(post("/test/echo").contentType(MediaType.APPLICATION_JSON).content("{\"name\":"))
-                .andExpect(jsonPath("$.message").value(ErrorCode.MALFORMED_REQUEST.getDefaultMessage()))
+                .andExpect(jsonPath("$.message").value(ErrorCode.MALFORMED_REQUEST.getMessage()))
                 .andExpect(jsonPath("$.details").isEmpty());
     }
 

@@ -1,6 +1,6 @@
 package com.deployhub.job.service;
 
-import com.deployhub.common.OpsErrorCode;
+import com.deployhub.common.ErrorCode;
 import com.deployhub.job.entity.JobStatus;
 import com.deployhub.job.entity.PackageJob;
 import com.deployhub.job.repository.PackageJobRepository;
@@ -36,7 +36,7 @@ public class OrphanJobCleaner implements ApplicationRunner {
         for (PackageJob job : orphans) {
             log.warn(
                     "{} versionName={}, status={}",
-                    OpsErrorCode.ORPHAN_JOB_RESET.toMessage(),
+                    ErrorCode.ORPHAN_JOB_RESET.toMessage(),
                     job.getVersionName(),
                     job.getStatus());
             job.changeStatus(JobStatus.FAILED);

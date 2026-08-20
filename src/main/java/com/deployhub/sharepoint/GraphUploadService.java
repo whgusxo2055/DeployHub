@@ -1,8 +1,6 @@
 package com.deployhub.sharepoint;
 
-import com.deployhub.common.OpsErrorCode;
 import com.deployhub.common.ApiException;
-import com.deployhub.common.ItemErrorCode;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
@@ -90,7 +88,7 @@ public class GraphUploadService {
         try {
             ref = ImageReference.parse(item.getImageTag());
         } catch (IllegalArgumentException e) {
-            return failItem(item, ItemErrorCode.INVALID_IMAGE_TAG, e.getMessage());
+            return failItem(item, ErrorCode.INVALID_IMAGE_TAG, e.getMessage());
         }
         String fileName = ref.tarFileName();
         Path tarPath = Path.of(workDir, item.getVersionName(), "images", fileName);
@@ -98,7 +96,7 @@ public class GraphUploadService {
         try {
             fileSize = Files.size(tarPath);
         } catch (IOException e) {
-            return failItem(item, ItemErrorCode.UPLOAD_FILE_MISSING, e.getMessage());
+            return failItem(item, ErrorCode.UPLOAD_FILE_MISSING, e.getMessage());
         }
 
         int attempt = 0;
@@ -136,7 +134,7 @@ public class GraphUploadService {
      * 그게 무인증 {@code GET /api/package-jobs/{versionName}} 응답으로 나간다. 원문은 호출자가
      * {@code detail}로 넘겨 로그에만 남긴다.
      */
-    private ItemErrorCode classifyFailure(RuntimeException e) {
+    private ErrorCode classifyFailure(RuntimeException e) {
         // 청크 재시도를 소진하고 올라온 타임아웃·5xx는 껍데기가 RetryableCallException이다 —
         // 벗기지 않으면 Graph 장애가 UPLOAD_UNAVAILABLE이 아니라 UPLOAD_FAILED로 기록된다.
         if (e instanceof RetryableCallException retryable) {
@@ -144,13 +142,13 @@ public class GraphUploadService {
         }
         if (e instanceof ApiException apiEx) {
             return switch (apiEx.getErrorCode()) {
-                case GRAPH_TOKEN_ISSUE_FAILED -> ItemErrorCode.UPLOAD_TOKEN_FAILED;
-                case GRAPH_FORBIDDEN -> ItemErrorCode.UPLOAD_FORBIDDEN;
-                case GRAPH_UNAVAILABLE -> ItemErrorCode.UPLOAD_UNAVAILABLE;
-                default -> ItemErrorCode.UPLOAD_FAILED;
+                case GRAPH_TOKEN_ISSUE_FAILED -> ErrorCode.GRAPH_TOKEN_ISSUE_FAILED;
+                case GRAPH_FORBIDDEN -> ErrorCode.GRAPH_FORBIDDEN;
+                case GRAPH_UNAVAILABLE -> ErrorCode.GRAPH_UNAVAILABLE;
+                default -> ErrorCode.UPLOAD_FAILED;
             };
         }
-        return ItemErrorCode.UPLOAD_FAILED;
+        return ErrorCode.UPLOAD_FAILED;
     }
 
     /** 호출될 때마다 새 세션을 만든다 — 재시도가 이 메서드를 다시 부르는 것만으로 세션 재생성이 된다. */
@@ -170,17 +168,17 @@ public class GraphUploadService {
                     // 후퇴가 번갈아 나며 영원히 돈다. 파일 단위 총량으로 센다: 정상 재개는 청크당
                     // 한 번이면 충분하므로 청크 수 + 여유만큼만 허용하고, 성공해도 리셋하지 않는다.
                     if (++rangeMismatches > rangeMismatchBudget) {
-                        throw new IllegalStateException(OpsErrorCode.UPLOAD_RANGE_MISMATCH.toMessage(fileName));
+                        throw new IllegalStateException(ErrorCode.UPLOAD_RANGE_MISMATCH.toLogMessage(fileName));
                     }
                     offset = refreshOffset(uploadUrl, offset);
                     continue;
                 }
                 if (result.statusCode() == 404 || result.statusCode() == 410) {
-                    throw new IllegalStateException(OpsErrorCode.UPLOAD_SESSION_GONE.toMessage(fileName));
+                    throw new IllegalStateException(ErrorCode.UPLOAD_SESSION_GONE.toLogMessage(fileName));
                 }
                 if (!result.success()) {
                     throw new IllegalStateException("%s: 업로드가 실패했습니다(status=%d): %s"
-                            .formatted(ItemErrorCode.UPLOAD_FAILED.getCode(), result.statusCode(), fileName));
+                            .formatted(ErrorCode.UPLOAD_FAILED.getCode(), result.statusCode(), fileName));
                 }
 
                 offset = end + 1;
@@ -189,9 +187,9 @@ public class GraphUploadService {
                 }
             }
         } catch (IOException e) {
-            throw new IllegalStateException(OpsErrorCode.UPLOAD_FILE_UNREADABLE.toMessage(tarPath.getFileName()), e);
+            throw new IllegalStateException(ErrorCode.UPLOAD_FILE_UNREADABLE.toLogMessage(tarPath.getFileName()), e);
         }
-        throw new IllegalStateException(OpsErrorCode.UPLOAD_INCOMPLETE.toMessage(fileName));
+        throw new IllegalStateException(ErrorCode.UPLOAD_INCOMPLETE.toLogMessage(fileName));
     }
 
     private String createUploadSession(String driveId, String folderItemId, String fileName) {
@@ -238,7 +236,7 @@ public class GraphUploadService {
         } catch (RestClientResponseException ex) {
             int code = ex.getStatusCode().value();
             if (code == 404 || code == 410) {
-                throw new IllegalStateException(OpsErrorCode.UPLOAD_SESSION_GONE.toMessage());
+                throw new IllegalStateException(ErrorCode.UPLOAD_SESSION_GONE.toMessage());
             }
             throw ex;
         }
@@ -274,7 +272,7 @@ public class GraphUploadService {
         }
     }
 
-    private boolean failItem(PackageItem item, ItemErrorCode errorCode, String detail) {
+    private boolean failItem(PackageItem item, ErrorCode errorCode, String detail) {
         return PackageItemFailure.fail(packageItemRepository, item, errorCode, detail);
     }
 

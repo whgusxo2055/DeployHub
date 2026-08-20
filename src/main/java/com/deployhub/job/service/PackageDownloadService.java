@@ -1,8 +1,7 @@
 package com.deployhub.job.service;
 
-import com.deployhub.common.OpsErrorCode;
+import com.deployhub.common.ErrorCode;
 import com.deployhub.common.BoundedParallelism;
-import com.deployhub.common.ItemErrorCode;
 import com.deployhub.common.CredentialMasker;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
@@ -97,7 +96,7 @@ public class PackageDownloadService {
         try {
             Files.createDirectories(imagesDir);
         } catch (IOException e) {
-            throw new IllegalStateException(OpsErrorCode.WORK_DIR_CREATE_FAILED.toMessage(imagesDir), e);
+            throw new IllegalStateException(ErrorCode.WORK_DIR_CREATE_FAILED.toLogMessage(imagesDir), e);
         }
         checkDiskSpace(imagesDir, manifestContext, targets);
 
@@ -140,8 +139,8 @@ public class PackageDownloadService {
         long required = (long) (expectedTotal * REQUIRED_FREE_SPACE_RATIO);
         long usable = imagesDir.toFile().getUsableSpace();
         if (usable < required) {
-            log.warn("{} required={} bytes, usable={} bytes", OpsErrorCode.INSUFFICIENT_DISK.toMessage(), required, usable);
-            throw new IllegalStateException(OpsErrorCode.INSUFFICIENT_DISK.toMessage());
+            log.warn("{} required={} bytes, usable={} bytes", ErrorCode.INSUFFICIENT_DISK.toMessage(), required, usable);
+            throw new IllegalStateException(ErrorCode.INSUFFICIENT_DISK.toMessage());
         }
     }
 
@@ -151,12 +150,12 @@ public class PackageDownloadService {
             ref = ImageReference.parse(item.getImageTag());
         } catch (IllegalArgumentException e) {
             // 형식 오류는 항목 실패로 국한한다. 재시도 경로는 VALIDATING을 건너뛰어 이 방어가 실제로 쓰인다.
-            return failItem(item, ItemErrorCode.INVALID_IMAGE_TAG, e.getMessage());
+            return failItem(item, ErrorCode.INVALID_IMAGE_TAG, e.getMessage());
         }
 
         ManifestInfo expected = manifestInfo != null ? manifestInfo : fetchManifestSafely(ref, item.getImageTag());
         if (expected == null) {
-            return failItem(item, ItemErrorCode.IMAGE_NOT_FOUND, null);
+            return failItem(item, ErrorCode.IMAGE_NOT_FOUND, null);
         }
 
         Path tarPath = imagesDir.resolve(ref.tarFileName());
@@ -180,7 +179,7 @@ public class PackageDownloadService {
                         item,
                         result.errorCode() != null
                                 ? result.errorCode()
-                                : (result.timedOut() ? ItemErrorCode.SKOPEO_TIMEOUT : ItemErrorCode.SKOPEO_FAILED),
+                                : (result.timedOut() ? ErrorCode.SKOPEO_TIMEOUT : ErrorCode.SKOPEO_FAILED),
                         "exit=%d, stderr=%s".formatted(result.exitCode(), maskedStderr));
             }
             attempt++;
@@ -208,7 +207,7 @@ public class PackageDownloadService {
             deleteQuietly(tarPath);
             return failItem(
                     item,
-                    current == null ? ItemErrorCode.DIGEST_UNVERIFIABLE : ItemErrorCode.DIGEST_MISMATCH,
+                    current == null ? ErrorCode.DIGEST_UNVERIFIABLE : ErrorCode.DIGEST_MISMATCH,
                     "expected=%s, current=%s".formatted(expectedDigest, currentDigest));
         }
 
@@ -217,11 +216,11 @@ public class PackageDownloadService {
             fileSize = Files.size(tarPath);
         } catch (IOException e) {
             deleteQuietly(tarPath);
-            return failItem(item, ItemErrorCode.ARCHIVE_UNREADABLE, e.getMessage());
+            return failItem(item, ErrorCode.ARCHIVE_UNREADABLE, e.getMessage());
         }
         if (fileSize == 0) {
             deleteQuietly(tarPath);
-            return failItem(item, ItemErrorCode.ARCHIVE_EMPTY, null);
+            return failItem(item, ErrorCode.ARCHIVE_EMPTY, null);
         }
 
         item.markDownloaded(fileSize);
@@ -229,7 +228,7 @@ public class PackageDownloadService {
         return true;
     }
 
-    private boolean failItem(PackageItem item, ItemErrorCode errorCode, String detail) {
+    private boolean failItem(PackageItem item, ErrorCode errorCode, String detail) {
         return PackageItemFailure.fail(packageItemRepository, item, errorCode, detail);
     }
 
@@ -312,7 +311,7 @@ public class PackageDownloadService {
         } catch (IOException e) {
             // StartupChecks가 조기 검출하지만 기동 이후 경로가 사라지는 경우를 방어한다.
             // 바이너리 누락은 재시도해도 소용없다 — 코드를 함께 실어 백오프를 건너뛰게 한다.
-            return new SkopeoResult(-1, e.getMessage(), false, ItemErrorCode.SKOPEO_NOT_EXECUTABLE);
+            return new SkopeoResult(-1, e.getMessage(), false, ErrorCode.SKOPEO_NOT_EXECUTABLE);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("다운로드 대기 중 인터럽트되었습니다.", e);
@@ -384,7 +383,7 @@ public class PackageDownloadService {
     }
 
     /** {@code errorCode}가 있으면 stderr 분류보다 우선한다(예: 바이너리 자체가 없는 경우). */
-    private record SkopeoResult(int exitCode, String stderr, boolean timedOut, ItemErrorCode errorCode) {
+    private record SkopeoResult(int exitCode, String stderr, boolean timedOut, ErrorCode errorCode) {
 
         SkopeoResult(int exitCode, String stderr, boolean timedOut) {
             this(exitCode, stderr, timedOut, null);

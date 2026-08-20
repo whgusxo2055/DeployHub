@@ -1,6 +1,6 @@
 package com.deployhub.sharepoint;
 
-import com.deployhub.common.OpsErrorCode;
+import com.deployhub.common.ErrorCode;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -18,7 +18,7 @@ public class UploadChunkSizeValidator {
 
     public UploadChunkSizeValidator(@Value("${deployhub.upload.chunk-size}") long chunkSize) {
         if (chunkSize <= 0 || chunkSize % CHUNK_SIZE_MULTIPLE != 0 || chunkSize > MAX_CHUNK_SIZE) {
-            throw new IllegalStateException(OpsErrorCode.INVALID_CHUNK_SIZE.toMessage(chunkSize));
+            throw new IllegalStateException(ErrorCode.INVALID_CHUNK_SIZE.toLogMessage(chunkSize));
         }
     }
 }

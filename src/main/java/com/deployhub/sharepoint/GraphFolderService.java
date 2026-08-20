@@ -1,6 +1,6 @@
 package com.deployhub.sharepoint;
 
-import com.deployhub.common.OpsErrorCode;
+import com.deployhub.common.ErrorCode;
 import com.deployhub.common.ApiException;
 import com.deployhub.job.service.PackageJobService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -50,7 +50,7 @@ public class GraphFolderService {
 
         clearExistingChildren(driveId, folder.id());
         String linkUrl = createShareLink(driveId, folder.id()).orElseGet(() -> {
-            log.warn("{} versionName={}", OpsErrorCode.SHARE_LINK_BLOCKED.toMessage(), versionName);
+            log.warn("{} versionName={}", ErrorCode.SHARE_LINK_BLOCKED.toMessage(), versionName);
             return folder.webUrl();
         });
 
@@ -68,10 +68,10 @@ public class GraphFolderService {
     private void validateFolderName(String name) {
         // 전부 '.'인 이름(".", "..")은 상위 경로를 가리킬 수 있다.
         if (name.chars().allMatch(c -> c == '.')) {
-            throw new IllegalStateException(OpsErrorCode.INVALID_FOLDER_NAME.toMessage(name));
+            throw new IllegalStateException(ErrorCode.INVALID_FOLDER_NAME.toLogMessage(name));
         }
         if (FORBIDDEN_CHARS.matcher(name).find()) {
-            throw new IllegalStateException(OpsErrorCode.INVALID_FOLDER_NAME.toMessage(name));
+            throw new IllegalStateException(ErrorCode.INVALID_FOLDER_NAME.toLogMessage(name));
         }
     }
 
@@ -92,7 +92,7 @@ public class GraphFolderService {
                         .getOrNull(folderPath(driveId, versionName))
                         .map(this::parseFolderItem)
                         .orElseThrow(() ->
-                                new IllegalStateException(OpsErrorCode.FOLDER_LOOKUP_FAILED.toMessage(versionName)));
+                                new IllegalStateException(ErrorCode.FOLDER_LOOKUP_FAILED.toLogMessage(versionName)));
             }
             throw ex;
         }
@@ -102,7 +102,7 @@ public class GraphFolderService {
         return graphApiClient
                 .getOrNull("/drives/%s/root:%s".formatted(driveId, graphProperties.rootPath()))
                 .map(this::parseFolderItem)
-                .orElseThrow(() -> new IllegalStateException(OpsErrorCode.ROOT_PATH_MISSING.toMessage(graphProperties.rootPath())))
+                .orElseThrow(() -> new IllegalStateException(ErrorCode.ROOT_PATH_MISSING.toLogMessage(graphProperties.rootPath())))
                 .id();
     }
 
@@ -146,7 +146,7 @@ public class GraphFolderService {
             String response = graphApiClient.post("/drives/%s/items/%s/createLink".formatted(driveId, folderItemId), body);
             return Optional.of(extractLinkWebUrl(response));
         } catch (RuntimeException ex) {
-            log.warn("{} folderItemId={}, reason={}", OpsErrorCode.SHARE_LINK_REJECTED.toMessage(), folderItemId, describeBriefly(ex));
+            log.warn("{} folderItemId={}, reason={}", ErrorCode.SHARE_LINK_REJECTED.toMessage(), folderItemId, describeBriefly(ex));
             return Optional.empty();
         }
     }
