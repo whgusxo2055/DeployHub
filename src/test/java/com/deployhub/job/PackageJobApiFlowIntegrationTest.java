@@ -63,8 +63,14 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
 
     @AfterEach
     void 데이터_정리() {
-        jdbcTemplate.execute("DELETE FROM package_item");
-        jdbcTemplate.execute("DELETE FROM package_job");
+        // 비동기 Job이 아직 돌고 있으면 PackageValidationService의 saveAll이 방금 지운 항목을
+        // detached merge로 되살려 넣어(INSERT) 뒤이은 package_job 삭제가 FK로 죽는다 —
+        // 전체 스위트 부하에서만 나던 간헐 실패다. 상태를 기다릴 수는 없다(진행 중 Job을 직접
+        // 넣어 두는 테스트가 있다) — 조용해질 때까지 삭제를 다시 시도한다.
+        await().atMost(Duration.ofSeconds(10)).ignoreExceptions().untilAsserted(() -> {
+            jdbcTemplate.execute("DELETE FROM package_item");
+            jdbcTemplate.execute("DELETE FROM package_job");
+        });
         jdbcTemplate.execute("DELETE FROM sub_version");
         jdbcTemplate.execute("DELETE FROM main_version");
     }
