@@ -43,8 +43,6 @@ public class NcrRegistryClient {
     private static final Pattern BEARER_SCHEME = Pattern.compile("(?i)\\bbearer\\b");
     private static final Pattern PARAM = Pattern.compile("(\\w+)\\s*=\\s*\"([^\"]*)\"");
 
-    // Boot 빈이 아니라 기본 설정 매퍼를 쓴다 — 미지의 필드에 실패하는 엄격 모드가 의도다(TokenResponse 참고).
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final String DIGEST_HEADER = "Docker-Content-Digest";
     // 단일 매니페스트 2종 + 인덱스 2종을 모두 보낼 것. 하나라도 빠지면 레지스트리가 있는 이미지를
     // 404(MANIFEST_UNKNOWN)로 돌려줘 "이미지 없음"으로 오판한다.
@@ -57,11 +55,17 @@ public class NcrRegistryClient {
 
     private final NcrProperties properties;
     private final RetryExecutor retryExecutor;
+    private final ObjectMapper objectMapper;
     private final RestClient restClient;
 
-    public NcrRegistryClient(NcrProperties properties, RetryExecutor retryExecutor, RestClient.Builder restClientBuilder) {
+    public NcrRegistryClient(
+            NcrProperties properties,
+            RetryExecutor retryExecutor,
+            ObjectMapper objectMapper,
+            RestClient.Builder restClientBuilder) {
         this.properties = properties;
         this.retryExecutor = retryExecutor;
+        this.objectMapper = objectMapper;
         this.restClient = restClientBuilder.baseUrl(resolveBaseUrl(properties.endpoint())).build();
     }
 
@@ -252,12 +256,12 @@ public class NcrRegistryClient {
         return total;
     }
 
-    private static JsonNode readTree(String manifestJson) {
+    private JsonNode readTree(String manifestJson) {
         if (manifestJson == null || manifestJson.isBlank()) {
             return null;
         }
         try {
-            return OBJECT_MAPPER.readTree(manifestJson);
+            return objectMapper.readTree(manifestJson);
         } catch (Exception e) {
             log.warn("NCR 매니페스트 응답을 파싱할 수 없어 크기를 미상으로 처리합니다.", e);
             return null;
@@ -338,7 +342,7 @@ public class NcrRegistryClient {
                     .body(String.class);
             // 본문이 JSON 리터럴 null이면 readValue가 null을 돌려준다 — 이어 붙이면 NPE가 나고
             // 그 NPE는 아래 catch 어디에도 안 걸려 배치를 통째로 중단시킨다.
-            TokenResponse parsed = body == null ? null : OBJECT_MAPPER.readValue(body, TokenResponse.class);
+            TokenResponse parsed = body == null ? null : objectMapper.readValue(body, TokenResponse.class);
             String token = parsed == null ? null : parsed.anyToken();
             if (token == null) {
                 log.warn("NCR Bearer 토큰 응답이 비어 있습니다.");
@@ -402,7 +406,8 @@ public class NcrRegistryClient {
         return params;
     }
 
-    // NCR이 expires_in/issued_at도 함께 주는데 OBJECT_MAPPER가 엄격 모드라 이게 없으면 파싱이 깨진다.
+    // 주입 매퍼(Boot 빈)는 미지의 필드에 관대하지만, 그 설정에 기대지 않고 여기서 명시한다 —
+    // NCR은 expires_in/issued_at도 함께 준다.
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record TokenResponse(String token, String access_token) {
         String anyToken() {

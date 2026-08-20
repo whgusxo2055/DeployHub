@@ -12,6 +12,7 @@ import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Base64;
@@ -44,7 +45,9 @@ class NcrRegistryClientTest {
         server = MockRestServiceServer.bindTo(builder).build();
         RetryExecutor retryExecutor =
                 new RetryExecutor(new RetryProperties(1, List.of(Duration.ofMillis(1))), duration -> {});
-        client = new NcrRegistryClient(PROPERTIES, retryExecutor, builder);
+        // 프로덕션은 관대한 주입 매퍼지만 여기서는 일부러 엄격한 기본 매퍼를 쓴다 —
+        // TokenResponse의 @JsonIgnoreProperties가 사라지는 걸 잡는 유일한 가드다.
+        client = new NcrRegistryClient(PROPERTIES, retryExecutor, new ObjectMapper(), builder);
     }
 
     @Test
