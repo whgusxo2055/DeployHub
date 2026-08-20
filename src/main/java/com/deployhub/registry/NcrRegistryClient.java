@@ -352,9 +352,17 @@ public class NcrRegistryClient {
             throw new ApiException(ErrorCode.REGISTRY_UNREACHABLE);
         } catch (RestClientResponseException ex) {
             log.warn("NCR Bearer 토큰 발급 실패: {}", ex.getStatusCode());
+            int status = ex.getStatusCode().value();
+            // auth 서비스 장애를 401로 뭉개면 재시도가 꺼지고, ImageTagChecker가 401만 그대로 올려
+            // 형제 태그 전체의 검증까지 중단된다 — 자격 증명 문제가 아닌 것은 재시도 대상이다.
+            if (status >= 500 || status == 429) {
+                throw new RetryableCallException(
+                        new ApiException(ErrorCode.REGISTRY_TIMEOUT),
+                        RetryAfterHeader.parseSeconds(ex.getResponseHeaders()));
+            }
             throw new ApiException(ErrorCode.REGISTRY_UNAUTHORIZED);
         } catch (ResourceAccessException ex) {
-            throw timeoutRetryable(realm, ex);
+            throw timeoutRetryable("token endpoint", ex);
         }
     }
 

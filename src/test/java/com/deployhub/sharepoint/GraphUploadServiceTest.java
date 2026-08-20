@@ -196,6 +196,105 @@ class GraphUploadServiceTest {
     }
 
     @Test
+    void 오프셋이_전진하는_416은_횟수_제한에_걸리지_않는다() {
+        // 재개가 수렴 중인데도 카운터가 쌓이면 정상 흐름이 E-1103으로 죽는다.
+        // 무한루프 조건은 "오프셋 제자리" 하나뿐이라 전진할 때는 세면 안 된다.
+        PackageItem item = downloadedItem();
+        when(packageItemRepository.findByVersionNameOrderByImageTagAsc(VERSION_NAME)).thenReturn(List.of(item));
+        GraphUploadService service = newService(10); // 25바이트
+
+        expectSession("https://upload.example/session-advance");
+        long[] starts = {0, 5, 10, 15};
+        for (long start : starts) {
+            server.expect(requestTo("https://upload.example/session-advance"))
+                    .andExpect(method(HttpMethod.PUT))
+                    .andExpect(header(HttpHeaders.CONTENT_RANGE, "bytes %d-%d/25".formatted(start, Math.min(start + 9, 24))))
+                    .andRespond(withStatus(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE));
+            server.expect(requestTo("https://upload.example/session-advance"))
+                    .andExpect(method(HttpMethod.GET))
+                    .andRespond(withSuccess(
+                            "{\"nextExpectedRanges\":[\"%d-24\"]}".formatted(start + 5), MediaType.APPLICATION_JSON));
+        }
+        server.expect(requestTo("https://upload.example/session-advance"))
+                .andExpect(header(HttpHeaders.CONTENT_RANGE, "bytes 20-24/25"))
+                .andRespond(withStatus(HttpStatus.CREATED).body("{\"webUrl\":\"https://sp/advanced.tar\"}"));
+
+        service.uploadAll(VERSION_NAME, FOLDER_ITEM_ID);
+
+        assertThat(item.getStatus()).isEqualTo(PackageItemStatus.UPLOADED);
+        server.verify();
+    }
+
+    @Test
+    void 세션_상태_조회가_본문_없는_200이면_같은_오프셋으로_이어서_보낸다() {
+        // body(String.class)가 null을 주고 readTree(null)이 IllegalArgumentException이라
+        // 설계된 폴백 대신 예외가 나가면, 새 세션으로 파일 전체를 다시 올린다.
+        PackageItem item = downloadedItem();
+        when(packageItemRepository.findByVersionNameOrderByImageTagAsc(VERSION_NAME)).thenReturn(List.of(item));
+        GraphUploadService service = newService(10);
+
+        expectSession("https://upload.example/session-empty");
+        server.expect(requestTo("https://upload.example/session-empty"))
+                .andExpect(method(HttpMethod.PUT))
+                .andExpect(header(HttpHeaders.CONTENT_RANGE, "bytes 0-9/25"))
+                .andRespond(withStatus(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE));
+        server.expect(requestTo("https://upload.example/session-empty"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withStatus(HttpStatus.OK));
+        server.expect(requestTo("https://upload.example/session-empty"))
+                .andExpect(header(HttpHeaders.CONTENT_RANGE, "bytes 0-9/25"))
+                .andRespond(withStatus(HttpStatus.ACCEPTED));
+        server.expect(requestTo("https://upload.example/session-empty"))
+                .andExpect(header(HttpHeaders.CONTENT_RANGE, "bytes 10-19/25"))
+                .andRespond(withStatus(HttpStatus.ACCEPTED));
+        server.expect(requestTo("https://upload.example/session-empty"))
+                .andExpect(header(HttpHeaders.CONTENT_RANGE, "bytes 20-24/25"))
+                .andRespond(withStatus(HttpStatus.CREATED).body("{\"webUrl\":\"https://sp/empty200.tar\"}"));
+
+        service.uploadAll(VERSION_NAME, FOLDER_ITEM_ID);
+
+        assertThat(item.getStatus()).isEqualTo(PackageItemStatus.UPLOADED);
+        server.verify();
+    }
+
+    @Test
+    void 오프셋이_앞뒤로_흔들리는_416은_예산을_소진하고_끝난다() {
+        // 전진이면 리셋하는 방식은 전진↔후퇴가 번갈아 나면 상한이 사라져 워커 스레드가 영구 점유된다.
+        // 방향과 무관하게 파일 단위 예산을 태우고 끝나야 한다(25바이트/10청크 → 예산 6).
+        PackageItem item = downloadedItem();
+        when(packageItemRepository.findByVersionNameOrderByImageTagAsc(VERSION_NAME)).thenReturn(List.of(item));
+        GraphUploadService service = newService(10);
+
+        for (int attempt = 0; attempt < 3; attempt++) { // maxRetries(2) → 파일 단위 3회 시도
+            expectSession("https://upload.example/session-oscillate-" + attempt);
+            String url = "https://upload.example/session-oscillate-" + attempt;
+            for (int i = 0; i < 6; i++) {
+                server.expect(requestTo(url)).andExpect(method(HttpMethod.PUT))
+                        .andRespond(withStatus(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE));
+                server.expect(requestTo(url)).andExpect(method(HttpMethod.GET))
+                        .andRespond(withSuccess(
+                                "{\"nextExpectedRanges\":[\"%d-24\"]}".formatted(i % 2 == 0 ? 10 : 0),
+                                MediaType.APPLICATION_JSON));
+            }
+            // 예산 초과 — 여기서 E-1103으로 끊긴다.
+            server.expect(requestTo(url)).andExpect(method(HttpMethod.PUT))
+                    .andRespond(withStatus(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE));
+        }
+
+        assertThatThrownBy(() -> service.uploadAll(VERSION_NAME, FOLDER_ITEM_ID))
+                .isInstanceOf(IllegalStateException.class);
+
+        assertThat(item.getStatus()).isEqualTo(PackageItemStatus.FAILED);
+        server.verify();
+    }
+
+    private void expectSession(String uploadUrl) {
+        server.expect(requestTo("https://graph.microsoft.com/v1.0/drives/drive-1/items/%s:/%s:/createUploadSession"
+                        .formatted(FOLDER_ITEM_ID, fileName)))
+                .andRespond(withSuccess("{\"uploadUrl\":\"%s\"}".formatted(uploadUrl), MediaType.APPLICATION_JSON));
+    }
+
+    @Test
     void 상태코드_416이면_세션_상태를_다시_조회해_그_오프셋부터_이어서_보낸다() {
         PackageItem item = downloadedItem();
         when(packageItemRepository.findByVersionNameOrderByImageTagAsc(VERSION_NAME)).thenReturn(List.of(item));

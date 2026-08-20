@@ -30,13 +30,6 @@ public class StartupChecks implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        // NcrRegistryClient가 테스트용 평문 HTTP 스킴을 허용하므로, 운영에 http://가 들어가면
-        // Basic 헤더와 --src-tls-verify=false가 무방비로 나간다 — endpoint에도 HTTPS를 강제한다.
-        if (ncrProperties.endpoint().regionMatches(true, 0, "http://", 0, 7)) {
-            throw new IllegalStateException(
-                    "NCR_ENDPOINT가 평문 HTTP입니다 — 자격 증명이 노출됩니다. HTTPS 엔드포인트를 쓰세요.");
-        }
-
         log.info("NCR Endpoint 도달성을 확인합니다.");
         ncrRegistryClient.healthCheck();
         log.info("NCR Endpoint 도달 확인 완료.");

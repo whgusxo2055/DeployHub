@@ -432,8 +432,10 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         registerMainVersion(versionName);
         jdbcTemplate.update(
                 "INSERT INTO package_job (version_name, status) VALUES (?, 'FAILED')", versionName);
+        // DOWNLOADED여야 "받아 둔 tar가 있었는데 사라졌다"가 된다 — FAILED뿐이면 애초에 받은 적이
+        // 없는 상태라(VALIDATING 실패 등) 소실이 아니고, 그건 force 없이 재시도돼야 한다.
         jdbcTemplate.update(
-                "INSERT INTO package_item (version_name, image_tag, status) VALUES (?, ?, 'FAILED')",
+                "INSERT INTO package_item (version_name, image_tag, status) VALUES (?, ?, 'DOWNLOADED')",
                 versionName,
                 testImageTag);
         // work-dir 아래 이 버전 디렉터리를 아예 만들지 않는다 — 소실 상태를 그대로 재현한다.

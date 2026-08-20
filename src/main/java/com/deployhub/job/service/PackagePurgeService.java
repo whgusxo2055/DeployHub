@@ -128,6 +128,11 @@ public class PackagePurgeService {
         }
     }
 
+    /** dryRun 보고가 실제 실행과 같은 기준을 쓰도록 존재 여부만 알려준다. */
+    public boolean hasLocalDir(String versionName) {
+        return Files.isDirectory(jobDir(versionName));
+    }
+
     private LocalDir deleteLocalDir(String versionName, String trigger) {
         Path dir = jobDir(versionName);
         if (!Files.exists(dir)) {

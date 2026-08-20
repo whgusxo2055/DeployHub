@@ -132,9 +132,9 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
     @Test
     void dryRun은_기한_경과_Job만_고르고_최근_RETENTION_COUNT건은_보호한다() throws IOException {
         Instant now = Instant.now();
-        insertDoneJobWithLocalDir("2027.02.01", now.minus(Duration.ofDays(400)));
-        insertDoneJobWithLocalDir("2027.02.02", now.minus(Duration.ofDays(300)));
-        insertDoneJobWithLocalDir("2027.02.03", now.minus(Duration.ofDays(2))); // 기한은 지났지만 최근 1건 → 보호
+        insertDoneJobWithFolderAndLocalDir("2027.02.01", now.minus(Duration.ofDays(400)));
+        insertDoneJobWithFolderAndLocalDir("2027.02.02", now.minus(Duration.ofDays(300)));
+        insertDoneJobWithFolderAndLocalDir("2027.02.03", now.minus(Duration.ofDays(2))); // 기한은 지났지만 최근 1건 → 보호
 
         ResponseEntity<PackageCleanupResponse> response =
                 restTemplate.postForEntity("/api/admin/cleanup?dryRun=true", null, PackageCleanupResponse.class);
@@ -212,6 +212,35 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
     }
 
     @Test
+    void dryRun도_실제로_지울_것만_보고한다() {
+        // 디렉터리 없음 + 폴더 id 없음 = 지울 게 하나도 없는 Job. dryRun이 이걸 담으면
+        // 운영자가 "내일 지워지겠구나"로 읽지만 실제 실행은 아무것도 안 한다.
+        registerMainVersion("2027.09.01");
+        insertDoneJob("2027.09.01", null, Instant.now().minus(Duration.ofDays(400)));
+
+        ResponseEntity<PackageCleanupResponse> response =
+                restTemplate.postForEntity("/api/admin/cleanup?dryRun=true", null, PackageCleanupResponse.class);
+
+        assertThat(response.getBody().localCleaned()).isEmpty();
+        assertThat(response.getBody().sharePointCleaned()).isEmpty();
+    }
+
+    @Test
+    void dryRun은_폴더가_없어도_지워질_로컬_디렉터리는_보고한다() throws IOException {
+        // 1단계는 DONE만 훑으므로 FAILED Job의 디렉터리는 2단계가 폴더와 함께 지운다 —
+        // dryRun이 폴더 id만 보면 실제로 지워질 수 GB가 보고에서 통째로 빠진다.
+        registerMainVersion("2027.09.11");
+        insertJob("2027.09.11", "FAILED", null, null, Instant.now().minus(Duration.ofDays(400)));
+        Files.createDirectories(Path.of(workDir, "2027.09.11", "images"));
+
+        ResponseEntity<PackageCleanupResponse> response =
+                restTemplate.postForEntity("/api/admin/cleanup?dryRun=true", null, PackageCleanupResponse.class);
+
+        assertThat(response.getBody().localCleaned()).containsExactly("2027.09.11");
+        assertThat(response.getBody().sharePointCleaned()).isEmpty();
+    }
+
+    @Test
     void 이미_사라진_작업_디렉터리는_정리했다고_보고하지_않는다() {
         // 1단계는 deleted_at을 안 찍어 대상에서 안 빠지므로, 같은 Job이 매일 다시 선정된다.
         // 디렉터리가 이미 없으면 지운 게 없는데도 localCleaned에 실려 운영자가 오판한다(실측).
@@ -258,7 +287,7 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
         // FN-08이 UPLOADING 진입 시 폴더를 만들어 두고 업로드가 깨지면 Job은 FAILED로 끝난다 —
         // DONE만 훑으면 그 폴더와 부분 업로드분이 영구히 남는다(코드리뷰로 발견).
         registerMainVersion("2027.05.01");
-        insertJob("2027.05.01", "FAILED", "https://contoso.sharepoint.com/2027.05.01",
+        insertJob("2027.05.01", "FAILED", "https://contoso.sharepoint.com/2027.05.01", "folder-2027.05.01",
                 Instant.now().minus(Duration.ofDays(400)));
         Files.createDirectories(Path.of(workDir, "2027.05.01", "images"));
 
@@ -266,9 +295,9 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
                 restTemplate.postForEntity("/api/admin/cleanup?dryRun=true", null, PackageCleanupResponse.class);
 
         assertThat(response.getBody().sharePointCleaned()).containsExactly("2027.05.01");
-        // 1단계(24시간 유예)는 DONE 전용이다 — FAILED 디렉터리는 재시도 여지로 남겨 두고
-        // 2단계가 보존 기한 뒤에 함께 지운다(구현계획서 592행).
-        assertThat(response.getBody().localCleaned()).isEmpty();
+        // 1단계(24시간 유예)는 DONE 전용이라 FAILED 디렉터리를 건드리지 않는다 — 대신 2단계가
+        // 보존 기한 뒤에 폴더와 함께 지우므로(구현계획서 592행) dryRun도 그 삭제를 보고해야 한다.
+        assertThat(response.getBody().localCleaned()).containsExactly("2027.05.01");
     }
 
     @Test
@@ -320,6 +349,12 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(queryDeletedAt("2027.07.01")).isNotNull();
     }
 
+    private void insertDoneJobWithFolderAndLocalDir(String versionName, Instant finishedAt) throws IOException {
+        registerMainVersion(versionName);
+        insertJob(versionName, "DONE", "https://contoso.sharepoint.com/" + versionName, "folder-" + versionName, finishedAt);
+        Files.createDirectories(Path.of(workDir, versionName, "images"));
+    }
+
     private void insertDoneJobWithLocalDir(String versionName, Instant finishedAt) throws IOException {
         registerMainVersion(versionName);
         insertDoneJob(versionName, null, finishedAt);
@@ -352,12 +387,18 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
 
     /** {@code sp_folder_id}는 비워 둔다 — Graph 호출 없이 정리 로직만 태우기 위함이다(클래스 javadoc). */
     private void insertJob(String versionName, String status, String folderUrl, Instant finishedAt) {
+        insertJob(versionName, status, folderUrl, null, finishedAt);
+    }
+
+    /** dryRun은 Graph를 호출하지 않으므로 폴더 id를 줘도 안전하다 — 이제 그 값이 있어야 정리 대상으로 센다. */
+    private void insertJob(String versionName, String status, String folderUrl, String folderId, Instant finishedAt) {
         jdbcTemplate.update(
-                "INSERT INTO package_job (version_name, status, sp_folder_url, finished_at) "
-                        + "VALUES (?, ?, ?, ?)",
+                "INSERT INTO package_job (version_name, status, sp_folder_url, sp_folder_id, finished_at) "
+                        + "VALUES (?, ?, ?, ?, ?)",
                 versionName,
                 status,
                 folderUrl,
+                folderId,
                 Timestamp.from(finishedAt));
     }
 

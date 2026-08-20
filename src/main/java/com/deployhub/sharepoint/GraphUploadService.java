@@ -156,7 +156,8 @@ public class GraphUploadService {
     private String uploadFile(String driveId, String folderItemId, String fileName, Path tarPath, long fileSize) {
         String uploadUrl = createUploadSession(driveId, folderItemId, fileName);
         long offset = 0;
-        int rangeMismatchRetries = 0;
+        long rangeMismatchBudget = MAX_RANGE_MISMATCH_RETRIES + fileSize / chunkSize + 1;
+        long rangeMismatches = 0;
         try (RandomAccessFile file = new RandomAccessFile(tarPath.toFile(), "r")) {
             while (offset < fileSize) {
                 long end = Math.min(offset + chunkSize, fileSize) - 1;
@@ -164,8 +165,10 @@ public class GraphUploadService {
                 GraphApiClient.ChunkUploadResult result = putChunkWithRetry(uploadUrl, chunk, offset, end, fileSize);
 
                 if (result.statusCode() == 416) {
-                    rangeMismatchRetries++;
-                    if (rangeMismatchRetries > MAX_RANGE_MISMATCH_RETRIES) {
+                    // 방향으로 판정하면 상한이 안 걸린다 — 서버가 오프셋을 앞뒤로 흔들면 전진 리셋과
+                    // 후퇴가 번갈아 나며 영원히 돈다. 파일 단위 총량으로 센다: 정상 재개는 청크당
+                    // 한 번이면 충분하므로 청크 수 + 여유만큼만 허용하고, 성공해도 리셋하지 않는다.
+                    if (++rangeMismatches > rangeMismatchBudget) {
                         throw new IllegalStateException("E-1103: 업로드 범위가 반복해서 어긋납니다: " + fileName);
                     }
                     offset = refreshOffset(uploadUrl, offset);
@@ -179,7 +182,6 @@ public class GraphUploadService {
                             "E-1101: 업로드가 실패했습니다(status=%d): %s".formatted(result.statusCode(), fileName));
                 }
 
-                rangeMismatchRetries = 0;
                 offset = end + 1;
                 if (offset >= fileSize) {
                     return extractWebUrl(result.body());
@@ -240,7 +242,9 @@ public class GraphUploadService {
             throw ex;
         }
         try {
-            JsonNode ranges = objectMapper.readTree(status).path("nextExpectedRanges");
+            // 본문 없는 200이면 body(String.class)가 null이고 readTree(null)은 IAE다 —
+            // 아래 catch에 안 걸려 폴백 대신 예외가 나가고, 새 세션으로 파일 전체를 다시 올리게 된다.
+            JsonNode ranges = objectMapper.readTree(status == null ? "" : status).path("nextExpectedRanges");
             if (ranges.isArray() && !ranges.isEmpty()) {
                 return Long.parseLong(ranges.get(0).asText().split("-")[0]);
             }

@@ -42,6 +42,10 @@ public class PackageCleanupService {
      */
     private static final Set<JobStatus> CLEANABLE = EnumSet.of(JobStatus.DONE, JobStatus.FAILED);
 
+    /** 진행 중(E-1404)도 그 사이 재실행됨(E-1405)도 "이번엔 건너뛴다"이지 실패가 아니다. */
+    private static final Set<ErrorCode> SKIPPABLE =
+            EnumSet.of(ErrorCode.PACKAGE_CLEANUP_BLOCKED, ErrorCode.PACKAGE_CLEANUP_RERUN);
+
     private final PackageJobRepository packageJobRepository;
     private final PackagePurgeService packagePurgeService;
     private final Duration localCleanupDelay;
@@ -107,7 +111,12 @@ public class PackageCleanupService {
                 continue;
             }
             if (dryRun) {
-                localCleaned.add(job.getVersionName());
+                // 실제 실행과 같은 기준으로만 담는다 — 이미 없는 디렉터리를 "지울 예정"으로 세면
+                // 매일 같은 목록이 나와 운영자가 상태를 오판한다.
+                if (Boolean.TRUE.equals(
+                        runQuietly(job, failed, () -> packagePurgeService.hasLocalDir(job.getVersionName())))) {
+                    localCleaned.add(job.getVersionName());
+                }
                 continue;
             }
             LocalDir localDir = runQuietly(
@@ -134,7 +143,16 @@ public class PackageCleanupService {
                 continue;
             }
             if (dryRun) {
-                sharePointCleaned.add(job.getVersionName());
+                // 2단계는 폴더와 로컬 디렉터리를 함께 지운다 — 폴더 id가 없어도 디렉터리는 지워지므로
+                // 그쪽을 빼면 이번엔 반대로 "지울 건데 보고 안 함"이 된다.
+                if (job.getSpFolderId() != null && !job.getSpFolderId().isBlank()) {
+                    sharePointCleaned.add(job.getVersionName());
+                }
+                if (!localCleaned.contains(job.getVersionName())
+                        && Boolean.TRUE.equals(
+                                runQuietly(job, failed, () -> packagePurgeService.hasLocalDir(job.getVersionName())))) {
+                    localCleaned.add(job.getVersionName());
+                }
                 continue;
             }
             PurgeResult result = runQuietly(
@@ -194,7 +212,7 @@ public class PackageCleanupService {
         try {
             return action.get();
         } catch (ApiException e) {
-            if (e.getErrorCode() == ErrorCode.PACKAGE_CLEANUP_BLOCKED) {
+            if (SKIPPABLE.contains(e.getErrorCode())) {
                 return null; // 사유는 PackagePurgeService가 이미 로그로 남겼다.
             }
             log.warn(

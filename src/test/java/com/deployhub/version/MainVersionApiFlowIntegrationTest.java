@@ -373,6 +373,19 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
     }
 
+    @Test
+    void 대소문자만_다른_code로_다시_PUT해도_자기_태그는_중복이_아니다() {
+        // sub_version.code는 utf8mb4_0900_ai_ci라 DB는 'CC'와 'cc'를 같은 행으로 고른다.
+        // 소유자 판정만 자바 equals면 자기 컴포넌트를 남의 것으로 보고 E-0203을 던진다.
+        registerMainVersion("2026.10.71");
+        putSubVersion("2026.10.71", new SubVersionUpsertRequest("CC", "v1.0.0", null, 1, SubmitStatus.PENDING, List.of("acme/x:v1")));
+
+        ResponseEntity<SubVersionSavedResponse> again = putSubVersion(
+                "2026.10.71", new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.UNCHANGED, List.of("acme/x:v1")));
+
+        assertThat(again.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
     private ResponseEntity<SubVersionSavedResponse> putSubVersion(
             String versionName, SubVersionUpsertRequest request) {
         return restTemplate.exchange(

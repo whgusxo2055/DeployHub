@@ -145,6 +145,24 @@ class NcrRegistryClientTest {
     }
 
     @Test
+    void 토큰_엔드포인트의_5xx는_인증_실패가_아니라_재시도_대상이다() {
+        // auth 서비스 장애를 E-0401로 분류하면 RetryExecutor가 재시도하지 않고,
+        // ImageTagChecker가 401만 그대로 올리므로 Job 전체가 "인증 실패"로 죽는다.
+        // 재시도 대상이 되면 RetryExecutor가 maxRetries(1)만큼 더 돌고, 소진 후 giveUpException을 던진다.
+        for (int attempt = 0; attempt < 2; attempt++) {
+            expectChallenge();
+            server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr"))
+                    .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+        }
+
+        assertThatThrownBy(() -> client.getManifest(new ImageReference("repo", "v1")))
+                .isInstanceOf(ApiException.class)
+                .extracting(ex -> ((ApiException) ex).getErrorCode())
+                .isEqualTo(ErrorCode.REGISTRY_TIMEOUT);
+        server.verify();
+    }
+
+    @Test
     void realm이_다른_호스트면_자격증명을_보내지_않고_실패한다() {
         // 이 realm으로 accessKey/secretKey가 Basic 헤더에 담겨 나간다 — 401 헤더를 통제할
         // 수 있는 쪽이 임의 호스트를 지정하면 자격 증명을 그대로 받아간다.

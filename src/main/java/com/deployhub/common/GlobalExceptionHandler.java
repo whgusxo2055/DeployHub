@@ -4,8 +4,10 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
@@ -108,6 +110,17 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     public ResponseEntity<ApiErrorResponse> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException ex) {
         return errorResponse(ErrorCode.UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    /**
+     * 클라이언트가 JSON을 안 받겠다고 한 것이라 공통 오류 스키마를 실을 수 없다 — 본문 없이 406만 준다.
+     * 이게 없으면 {@code handleUnexpected}가 잡아 무인증 API에 Accept 헤더 하나로 ERROR + 스택트레이스가 쌓인다.
+     */
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<Void> handleNotAcceptable(
+            HttpMediaTypeNotAcceptableException ex, HttpServletRequest request) {
+        log.debug("허용 가능한 표현이 없습니다: path={}, supported={}", request.getRequestURI(), ex.getSupportedMediaTypes());
+        return ResponseEntity.status(HttpStatus.NOT_ACCEPTABLE).build();
     }
 
     @ExceptionHandler(Exception.class)

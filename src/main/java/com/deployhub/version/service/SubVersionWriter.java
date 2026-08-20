@@ -42,10 +42,13 @@ public class SubVersionWriter {
                 .map(MainVersion::getVersionName)
                 .orElseThrow(() ->
                         new ApiException(ErrorCode.MAIN_VERSION_NOT_FOUND, List.of("versionName=" + versionName)));
-        assertImageTagsUnique(canonical, request.code(), tags);
+        // 조회를 여기서 한 번만 한다 — 소유자 판정이 이 결과(=DB가 고른 행)를 그대로 써야 한다.
+        SubVersion existing =
+                subVersionRepository.findByMainVersionNameAndCode(canonical, request.code()).orElse(null);
+        assertImageTagsUnique(canonical, existing == null ? null : existing.getId(), tags);
 
         try {
-            return upsert(canonical, request, tags);
+            return upsert(canonical, existing, request, tags);
         } catch (DataIntegrityViolationException e) {
             // uk_sub_version_main_code / component PK 충돌. 락으로 대부분 막히지만 남는 경합은
             // 500(E-9000)이 아니라 "다시 시도하세요"로 돌려준다.
@@ -53,9 +56,8 @@ public class SubVersionWriter {
         }
     }
 
-    private SubVersionSavedResponse upsert(String versionName, SubVersionUpsertRequest request, List<String> tags) {
-        SubVersion existing =
-                subVersionRepository.findByMainVersionNameAndCode(versionName, request.code()).orElse(null);
+    private SubVersionSavedResponse upsert(
+            String versionName, SubVersion existing, SubVersionUpsertRequest request, List<String> tags) {
         boolean isNew = existing == null;
         SubVersion subVersion = isNew
                 ? subVersionRepository.save(SubVersion.builder()
@@ -115,22 +117,24 @@ public class SubVersionWriter {
      * 메인버전 내 image_tag 유일성(E-0203). DB 제약으로 못 걸어(PK가 서브버전을 못 가로지른다) 위
      * 행 락이 원자성을 대신한다. 요청 안의 중복은 {@code resolveImageTags}가 이미 거부했다.
      */
-    private void assertImageTagsUnique(String versionName, String code, List<String> tags) {
+    private void assertImageTagsUnique(String versionName, Long ownSubVersionId, List<String> tags) {
         Set<String> newTags = Set.copyOf(tags);
         Map<Long, String> codeBySubVersionId =
                 subVersionRepository.findByMainVersionNameOrderBySortOrderAsc(versionName).stream()
                         .collect(Collectors.toMap(SubVersion::getId, SubVersion::getCode));
 
         for (Component existing : componentRepository.findByMainVersionName(versionName)) {
-            String ownerCode = codeBySubVersionId.get(existing.getSubVersionId());
-            if (ownerCode == null || ownerCode.equals(code)) {
-                // 이번 요청이 재생성할 컴포넌트이므로 비교 대상에서 제외한다.
+            // code 문자열로 비교하면 안 된다 — sub_version.code는 ai_ci라 DB는 'CC'와 'cc'를 같은
+            // 행으로 고르는데 자바 equals는 갈라서, 자기 컴포넌트를 남의 것으로 보고 E-0203을 던진다.
+            if (existing.getSubVersionId().equals(ownSubVersionId)) {
                 continue;
             }
             if (newTags.contains(existing.getImageTag())) {
                 throw new ApiException(
                         ErrorCode.DUPLICATE_IMAGE_TAG,
-                        List.of(existing.getImageTag(), "code=" + ownerCode, "code=" + code));
+                        List.of(
+                                existing.getImageTag(),
+                                "code=" + codeBySubVersionId.get(existing.getSubVersionId())));
             }
         }
     }

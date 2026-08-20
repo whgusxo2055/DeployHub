@@ -110,6 +110,21 @@ class PackageJobRetryTest {
         assertThat(job.getStatus()).isEqualTo(JobStatus.DONE);
     }
 
+    @Test
+    void 다운로드를_시작한_적_없는_Job은_작업_디렉터리가_없어도_force_없이_재시도된다() {
+        // images 디렉터리는 다운로드가 시작될 때 만들어진다 — VALIDATING에서 죽으면 애초에 없다.
+        // 그 부재를 "소실"로 보면 실패 원인과 무관한 E-0703이 나가고 force를 요구하게 된다.
+        PackageJob job = PackageJob.builder().versionName(VERSION_NAME).status(JobStatus.FAILED).build();
+        PackageItem failed = newItem("acme/a:1.0", PackageItemStatus.FAILED);
+        when(packageJobRepository.lockOrThrow(VERSION_NAME)).thenReturn(job);
+        when(packageItemRepository.findByVersionNameOrderByImageTagAsc(VERSION_NAME)).thenReturn(List.of(failed));
+
+        service().retry(VERSION_NAME, new PackageItemRetryRequest(null, false));
+
+        assertThat(job.getStatus()).isEqualTo(JobStatus.DOWNLOADING);
+        assertThat(failed.getStatus()).isEqualTo(PackageItemStatus.PENDING);
+    }
+
     private PackageJobService service() {
         return new PackageJobService(
                 packageJobRepository,

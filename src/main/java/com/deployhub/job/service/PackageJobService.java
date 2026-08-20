@@ -172,7 +172,12 @@ public class PackageJobService {
         }
 
         List<PackageItem> allItems = packageItemRepository.findByVersionNameOrderByImageTagAsc(versionName);
-        boolean workDirLost = !Files.isDirectory(Path.of(workDir, versionName, "images"));
+        // 작업 디렉터리는 다운로드가 시작될 때 만들어진다 — VALIDATING에서 죽은 Job은 애초에 없으므로
+        // 부재를 "소실"로 보면 실패 원인과 무관한 E-0703이 나가고 force를 요구하게 된다.
+        boolean expectsTars = allItems.stream()
+                .anyMatch(item -> item.getStatus() == PackageItemStatus.DOWNLOADED
+                        || item.getStatus() == PackageItemStatus.UPLOADED);
+        boolean workDirLost = expectsTars && !Files.isDirectory(Path.of(workDir, versionName, "images"));
         if (workDirLost && !request.force()) {
             throw new ApiException(ErrorCode.WORK_DIR_LOST);
         }
