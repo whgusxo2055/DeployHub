@@ -11,7 +11,9 @@ import com.deployhub.job.service.PackagePurgeService.PurgeResult;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.EnumSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
@@ -103,7 +105,7 @@ public class PackageCleanupService {
 
         List<String> localCleaned = new ArrayList<>();
         List<String> sharePointCleaned = new ArrayList<>();
-        List<String> failed = new ArrayList<>();
+        Set<String> failed = new LinkedHashSet<>();
 
         // 1단계 — DONE만 대상이다. FAILED의 디렉터리는 재시도 여지를 남기고 2단계가 기한 뒤에 함께 지운다.
         for (PackageJob job : candidates) {
@@ -182,7 +184,7 @@ public class PackageCleanupService {
                 .dryRun(dryRun)
                 .localCleaned(localCleaned)
                 .sharePointCleaned(sharePointCleaned)
-                .failed(failed)
+                .failed(List.copyOf(failed))
                 .build();
     }
 
@@ -208,7 +210,7 @@ public class PackageCleanupService {
      *
      * @return 예외로 건너뛰었으면 null. 그 외에는 {@code action}의 반환값 그대로다.
      */
-    private <T> T runQuietly(PackageJob job, List<String> failed, Supplier<T> action) {
+    private <T> T runQuietly(PackageJob job, Collection<String> failed, Supplier<T> action) {
         try {
             return action.get();
         } catch (ApiException e) {

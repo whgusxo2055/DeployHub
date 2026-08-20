@@ -60,7 +60,8 @@ class GraphApiClientTest {
 
         client.healthCheck();
 
-        verify(tokenService).invalidate();
+        // 실패한 그 토큰을 넘겨야 다른 스레드가 방금 받은 정상 토큰을 지우지 않는다.
+        verify(tokenService).invalidate("stale-token");
         server.verify();
     }
 

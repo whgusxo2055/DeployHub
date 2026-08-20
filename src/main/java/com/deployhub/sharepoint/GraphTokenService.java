@@ -79,8 +79,15 @@ public class GraphTokenService {
     }
 
     /** 401로 거부된 캐시 토큰을 무효화한다 — 다음 호출이 새로 발급받는다. */
-    public void invalidate() {
-        cached = null;
+    /**
+     * 401을 본 스레드가 무조건 비우면 다른 스레드가 방금 받은 정상 토큰까지 버린다 —
+     * Entra는 갱신마다 refresh token을 회전시키므로 그만큼 불필요한 회전이 늘어난다.
+     */
+    public void invalidate(String staleToken) {
+        CachedToken current = cached;
+        if (current != null && current.token().equals(staleToken)) {
+            cached = null;
+        }
     }
 
     private CachedToken requestToken() {
