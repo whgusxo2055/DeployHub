@@ -26,7 +26,6 @@ import org.springframework.web.client.RestClientResponseException;
 public class GraphFolderService {
 
     private static final Pattern FORBIDDEN_CHARS = Pattern.compile("[\"*:<>?/\\\\|]");
-    private static final int MAX_NAME_LENGTH = 255;
     private static final String LINK_TYPE = "view";
     private static final String LINK_SCOPE = "organization";
 
@@ -60,12 +59,13 @@ public class GraphFolderService {
         return folder.id();
     }
 
+    /**
+     * 상위 계층(version_name 정규식 + VARCHAR(20) PK)이 이미 막지만, 이 값이 Graph 경로 addressing
+     * URL에 그대로 붙으므로 경로를 벗어나게 만드는 두 가지만 한 겹 더 본다. 길이·공백 검사는
+     * 컬럼 폭과 문자집합(숫자·'.'·'-')에서 도달할 수 없어 뺐다.
+     */
     private void validateFolderName(String name) {
-        if (name.isBlank() || name.length() > MAX_NAME_LENGTH || !name.strip().equals(name)) {
-            throw new IllegalStateException("E-1004: 폴더명 규칙을 위반했습니다: " + name);
-        }
-        // 전부 '.'인 이름(".", "..")은 SharePoint 경로 addressing에서 상위 경로를 가리킬 수 있다 —
-        // 상위 계층 정규식이 이미 막지만 그 검증이 느슨해지는 미래를 대비한 방어층이다.
+        // 전부 '.'인 이름(".", "..")은 상위 경로를 가리킬 수 있다.
         if (name.chars().allMatch(c -> c == '.')) {
             throw new IllegalStateException("E-1004: 폴더명에 허용되지 않는 문자가 있습니다: " + name);
         }

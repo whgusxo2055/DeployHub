@@ -76,7 +76,6 @@ public class NcrRegistryClient {
 
     // ponytail: Bearer 토큰을 캐시하지 않아 매 호출이 401→토큰발급→재요청 3 RTT다.
     // 대량 순회가 병목이 되면 GraphTokenService 같은 만료 캐시를 붙일 것.
-    /** 인증된 GET 응답 본문. 실패 시 재시도 정책을 적용한다. */
     /**
      * 매니페스트의 digest와 레이어 크기 합계(무결성 대조·디스크 판정 기준값).
      * 404만 {@link Optional#empty()}로 돌려 호출자가 배치를 계속하게 하고, 나머지는 예외로 던진다.

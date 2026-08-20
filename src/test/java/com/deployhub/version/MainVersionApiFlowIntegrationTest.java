@@ -183,7 +183,6 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
 
     /**
      * 빠뜨린 담당 영역은 아무 데도 안 걸린다 — {@code computeChanges}는 현재 code만 순회하고
-     * {@code missingCount}는 컴포넌트 0건인 행만 센다. 복사 없던 코드에서 실패함을 확인했다.
      */
     @Test
     void 새_메인버전은_직전_담당_영역을_전건_PENDING으로_복사한다() {

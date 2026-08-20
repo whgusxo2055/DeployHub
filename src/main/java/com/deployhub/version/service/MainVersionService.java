@@ -149,17 +149,12 @@ public class MainVersionService {
                 .toList();
 
         int componentCount = componentsBySubVersionId.values().stream().mapToInt(List::size).sum();
-        int missingCount = (int) subVersions.stream()
-                .filter(subVersion -> componentsBySubVersionId.getOrDefault(subVersion.getId(), List.of()).isEmpty())
-                .count();
-
         return MainVersionDetailResponse.builder()
                 .mainVersion(MainVersionInfoResponse.from(mainVersion))
                 .subVersions(subVersionResponses)
                 .summary(DetailSummaryResponse.builder()
                         .subVersionCount(subVersions.size())
                         .componentCount(componentCount)
-                        .missingCount(missingCount)
                         .build())
                 .build();
     }

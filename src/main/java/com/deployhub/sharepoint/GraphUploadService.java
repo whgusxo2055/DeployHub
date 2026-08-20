@@ -184,7 +184,7 @@ public class GraphUploadService {
 
                 offset = end + 1;
                 if (offset >= fileSize) {
-                    return extractWebUrl(result.body());
+                    return extractRequiredField(result.body(), "webUrl", "Graph 업로드 완료 응답");
                 }
             }
         } catch (IOException e) {
@@ -198,7 +198,7 @@ public class GraphUploadService {
                 Map.of("item", Map.of("@microsoft.graph.conflictBehavior", "replace", "name", fileName));
         String response = graphApiClient.post(
                 "/drives/%s/items/%s:/%s:/createUploadSession".formatted(driveId, folderItemId, fileName), body);
-        return extractUploadUrl(response);
+        return extractRequiredField(response, "uploadUrl", "Graph 업로드 세션 응답");
     }
 
     /** 5xx·429는 같은 청크를 그대로 재전송한다. 429는 서버가 명시한 Retry-After를 우선한다. */
@@ -259,14 +259,6 @@ public class GraphUploadService {
         file.seek(start);
         file.readFully(buffer);
         return buffer;
-    }
-
-    private String extractUploadUrl(String json) {
-        return extractRequiredField(json, "uploadUrl", "Graph 업로드 세션 응답");
-    }
-
-    private String extractWebUrl(String json) {
-        return extractRequiredField(json, "webUrl", "Graph 업로드 완료 응답");
     }
 
     private String extractRequiredField(String json, String field, String context) {

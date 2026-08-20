@@ -1,6 +1,5 @@
 package com.deployhub.job.service;
 
-import com.deployhub.common.ItemErrorCode;
 import com.deployhub.job.entity.PackageItem;
 import com.deployhub.job.repository.PackageItemRepository;
 import com.deployhub.registry.ImageTagChecker;

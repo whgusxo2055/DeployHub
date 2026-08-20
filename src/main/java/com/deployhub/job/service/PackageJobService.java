@@ -20,7 +20,6 @@ import com.deployhub.version.repository.MainVersionRepository;
 import com.deployhub.version.service.PackagingEligibility;
 import com.deployhub.version.service.PackagingEligibilityService;
 import com.deployhub.version.service.VersionComparisonService;
-import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLIntegrityConstraintViolationException;
