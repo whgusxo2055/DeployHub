@@ -1,5 +1,6 @@
 package com.deployhub.job.service;
 
+import com.deployhub.common.OpsErrorCode;
 import com.deployhub.job.entity.JobStatus;
 import com.deployhub.job.entity.PackageJob;
 import com.deployhub.job.repository.PackageJobRepository;
@@ -34,7 +35,8 @@ public class OrphanJobCleaner implements ApplicationRunner {
         List<PackageJob> orphans = packageJobRepository.findByStatusInOrderByCreatedAtDesc(ORPHAN_STATUSES);
         for (PackageJob job : orphans) {
             log.warn(
-                    "E-1501 고아 Job을 FAILED로 정리합니다: versionName={}, status={}",
+                    "{} versionName={}, status={}",
+                    OpsErrorCode.ORPHAN_JOB_RESET.toMessage(),
                     job.getVersionName(),
                     job.getStatus());
             job.changeStatus(JobStatus.FAILED);

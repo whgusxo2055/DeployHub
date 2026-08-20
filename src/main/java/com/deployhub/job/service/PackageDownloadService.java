@@ -1,5 +1,6 @@
 package com.deployhub.job.service;
 
+import com.deployhub.common.OpsErrorCode;
 import com.deployhub.common.BoundedParallelism;
 import com.deployhub.common.ItemErrorCode;
 import com.deployhub.common.CredentialMasker;
@@ -96,7 +97,7 @@ public class PackageDownloadService {
         try {
             Files.createDirectories(imagesDir);
         } catch (IOException e) {
-            throw new IllegalStateException("E-0602: 작업 디렉터리를 만들 수 없습니다: " + imagesDir, e);
+            throw new IllegalStateException(OpsErrorCode.WORK_DIR_CREATE_FAILED.toMessage(imagesDir), e);
         }
         checkDiskSpace(imagesDir, manifestContext, targets);
 
@@ -139,8 +140,8 @@ public class PackageDownloadService {
         long required = (long) (expectedTotal * REQUIRED_FREE_SPACE_RATIO);
         long usable = imagesDir.toFile().getUsableSpace();
         if (usable < required) {
-            log.warn("E-0602 디스크 여유 공간 부족: required={} bytes, usable={} bytes", required, usable);
-            throw new IllegalStateException("E-0602: 디스크 여유 공간이 부족합니다.");
+            log.warn("{} required={} bytes, usable={} bytes", OpsErrorCode.INSUFFICIENT_DISK.toMessage(), required, usable);
+            throw new IllegalStateException(OpsErrorCode.INSUFFICIENT_DISK.toMessage());
         }
     }
 

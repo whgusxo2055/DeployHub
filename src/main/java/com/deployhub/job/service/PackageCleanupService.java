@@ -1,5 +1,6 @@
 package com.deployhub.job.service;
 
+import com.deployhub.common.OpsErrorCode;
 import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.job.dto.PackageCleanupResponse;
@@ -225,7 +226,7 @@ public class PackageCleanupService {
             return null;
         } catch (RuntimeException e) {
             // 권한 문제(403) 등 — 해당 건만 건너뛰고 배치를 계속한다.
-            log.warn("E-1402: 패키지 정리를 건너뜁니다: versionName={}, reason={}", job.getVersionName(), e.toString());
+            log.warn("{} versionName={}, reason={}", OpsErrorCode.CLEANUP_SKIPPED.toMessage(), job.getVersionName(), e.toString());
             failed.add(job.getVersionName());
             return null;
         }

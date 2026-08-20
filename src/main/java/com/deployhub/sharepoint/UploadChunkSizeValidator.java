@@ -1,5 +1,6 @@
 package com.deployhub.sharepoint;
 
+import com.deployhub.common.OpsErrorCode;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -17,9 +18,7 @@ public class UploadChunkSizeValidator {
 
     public UploadChunkSizeValidator(@Value("${deployhub.upload.chunk-size}") long chunkSize) {
         if (chunkSize <= 0 || chunkSize % CHUNK_SIZE_MULTIPLE != 0 || chunkSize > MAX_CHUNK_SIZE) {
-            throw new IllegalStateException(
-                    "E-1108: UPLOAD_CHUNK_SIZE는 320 KiB(327680)의 양의 배수여야 하며 60 MiB(62914560) 이하여야 합니다: "
-                            + chunkSize);
+            throw new IllegalStateException(OpsErrorCode.INVALID_CHUNK_SIZE.toMessage(chunkSize));
         }
     }
 }

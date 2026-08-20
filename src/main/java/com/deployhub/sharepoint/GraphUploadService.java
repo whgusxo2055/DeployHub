@@ -1,5 +1,6 @@
 package com.deployhub.sharepoint;
 
+import com.deployhub.common.OpsErrorCode;
 import com.deployhub.common.ApiException;
 import com.deployhub.common.ItemErrorCode;
 import com.deployhub.common.ErrorCode;
@@ -169,17 +170,17 @@ public class GraphUploadService {
                     // 후퇴가 번갈아 나며 영원히 돈다. 파일 단위 총량으로 센다: 정상 재개는 청크당
                     // 한 번이면 충분하므로 청크 수 + 여유만큼만 허용하고, 성공해도 리셋하지 않는다.
                     if (++rangeMismatches > rangeMismatchBudget) {
-                        throw new IllegalStateException("E-1103: 업로드 범위가 반복해서 어긋납니다: " + fileName);
+                        throw new IllegalStateException(OpsErrorCode.UPLOAD_RANGE_MISMATCH.toMessage(fileName));
                     }
                     offset = refreshOffset(uploadUrl, offset);
                     continue;
                 }
                 if (result.statusCode() == 404 || result.statusCode() == 410) {
-                    throw new IllegalStateException("E-1102: 업로드 세션이 소멸했습니다: " + fileName);
+                    throw new IllegalStateException(OpsErrorCode.UPLOAD_SESSION_GONE.toMessage(fileName));
                 }
                 if (!result.success()) {
-                    throw new IllegalStateException(
-                            "E-1101: 업로드가 실패했습니다(status=%d): %s".formatted(result.statusCode(), fileName));
+                    throw new IllegalStateException("%s: 업로드가 실패했습니다(status=%d): %s"
+                            .formatted(ItemErrorCode.UPLOAD_FAILED.getCode(), result.statusCode(), fileName));
                 }
 
                 offset = end + 1;
@@ -188,9 +189,9 @@ public class GraphUploadService {
                 }
             }
         } catch (IOException e) {
-            throw new IllegalStateException("E-1102: 업로드 대상 파일을 읽을 수 없습니다: " + tarPath.getFileName(), e);
+            throw new IllegalStateException(OpsErrorCode.UPLOAD_FILE_UNREADABLE.toMessage(tarPath.getFileName()), e);
         }
-        throw new IllegalStateException("E-1102: 업로드가 완료되지 않았습니다: " + fileName);
+        throw new IllegalStateException(OpsErrorCode.UPLOAD_INCOMPLETE.toMessage(fileName));
     }
 
     private String createUploadSession(String driveId, String folderItemId, String fileName) {
@@ -237,7 +238,7 @@ public class GraphUploadService {
         } catch (RestClientResponseException ex) {
             int code = ex.getStatusCode().value();
             if (code == 404 || code == 410) {
-                throw new IllegalStateException("E-1102: 업로드 세션이 소멸했습니다.");
+                throw new IllegalStateException(OpsErrorCode.UPLOAD_SESSION_GONE.toMessage());
             }
             throw ex;
         }

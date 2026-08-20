@@ -1,5 +1,6 @@
 package com.deployhub.sharepoint;
 
+import com.deployhub.common.OpsErrorCode;
 import com.deployhub.common.ApiException;
 import com.deployhub.job.service.PackageJobService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -49,7 +50,7 @@ public class GraphFolderService {
 
         clearExistingChildren(driveId, folder.id());
         String linkUrl = createShareLink(driveId, folder.id()).orElseGet(() -> {
-            log.warn("E-1005: 조직 범위 공유 링크 발급이 차단되어 폴더 webUrl로 대체합니다: versionName={}", versionName);
+            log.warn("{} versionName={}", OpsErrorCode.SHARE_LINK_BLOCKED.toMessage(), versionName);
             return folder.webUrl();
         });
 
@@ -67,10 +68,10 @@ public class GraphFolderService {
     private void validateFolderName(String name) {
         // 전부 '.'인 이름(".", "..")은 상위 경로를 가리킬 수 있다.
         if (name.chars().allMatch(c -> c == '.')) {
-            throw new IllegalStateException("E-1004: 폴더명에 허용되지 않는 문자가 있습니다: " + name);
+            throw new IllegalStateException(OpsErrorCode.INVALID_FOLDER_NAME.toMessage(name));
         }
         if (FORBIDDEN_CHARS.matcher(name).find()) {
-            throw new IllegalStateException("E-1004: 폴더명에 허용되지 않는 문자가 있습니다: " + name);
+            throw new IllegalStateException(OpsErrorCode.INVALID_FOLDER_NAME.toMessage(name));
         }
     }
 
@@ -91,7 +92,7 @@ public class GraphFolderService {
                         .getOrNull(folderPath(driveId, versionName))
                         .map(this::parseFolderItem)
                         .orElseThrow(() ->
-                                new IllegalStateException("E-1001: 폴더 생성 경합 후 재조회에 실패했습니다: " + versionName));
+                                new IllegalStateException(OpsErrorCode.FOLDER_LOOKUP_FAILED.toMessage(versionName)));
             }
             throw ex;
         }
@@ -101,7 +102,7 @@ public class GraphFolderService {
         return graphApiClient
                 .getOrNull("/drives/%s/root:%s".formatted(driveId, graphProperties.rootPath()))
                 .map(this::parseFolderItem)
-                .orElseThrow(() -> new IllegalStateException("E-1002: SharePoint 상위 경로가 없습니다: " + graphProperties.rootPath()))
+                .orElseThrow(() -> new IllegalStateException(OpsErrorCode.ROOT_PATH_MISSING.toMessage(graphProperties.rootPath())))
                 .id();
     }
 
@@ -145,7 +146,7 @@ public class GraphFolderService {
             String response = graphApiClient.post("/drives/%s/items/%s/createLink".formatted(driveId, folderItemId), body);
             return Optional.of(extractLinkWebUrl(response));
         } catch (RuntimeException ex) {
-            log.warn("E-1005: 공유 링크 발급이 거부됐습니다: folderItemId={}, reason={}", folderItemId, describeBriefly(ex));
+            log.warn("{} folderItemId={}, reason={}", OpsErrorCode.SHARE_LINK_REJECTED.toMessage(), folderItemId, describeBriefly(ex));
             return Optional.empty();
         }
     }

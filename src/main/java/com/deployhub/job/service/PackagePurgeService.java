@@ -1,5 +1,6 @@
 package com.deployhub.job.service;
 
+import com.deployhub.common.OpsErrorCode;
 import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.job.entity.JobStatus;
@@ -143,7 +144,7 @@ public class PackagePurgeService {
             return LocalDir.DELETED;
         }
         // 다음 배치에서 다시 시도한다 — 조건(DONE + 유예 경과 + 디렉터리 존재)이 그대로라 자연히 재선정된다.
-        log.warn("E-1403: 작업 디렉터리 삭제에 실패했습니다. 다음 배치에서 재시도합니다: {}", dir);
+        log.warn("{}", OpsErrorCode.LOCAL_DIR_DELETE_FAILED.toMessage(dir));
         return LocalDir.FAILED;
     }
 
