@@ -50,12 +50,12 @@ public class PackageDownloadService {
             "(?i)unauthorized|forbidden|\\b401\\b|\\b403\\b|\\b404\\b|manifest unknown|not found|no space left");
     private static final int STDERR_CAPTURE_LIMIT = 8192;
     // Boot 빈이 아니라 기본 설정 매퍼 — authfile 직렬화 전용이라 Spring 컨텍스트 설정과 무관해야 한다.
-    private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
 
     private final PackageItemRepository packageItemRepository;
     private final NcrRegistryClient ncrRegistryClient;
     private final NcrProperties ncrProperties;
     private final RetryProperties retryProperties;
+    private final ObjectMapper objectMapper;
     private final Executor downloadExecutor;
     private final String workDir;
     private final int downloadConcurrency;
@@ -66,6 +66,7 @@ public class PackageDownloadService {
             NcrRegistryClient ncrRegistryClient,
             NcrProperties ncrProperties,
             RetryProperties retryProperties,
+            ObjectMapper objectMapper,
             @Qualifier("downloadExecutor") Executor downloadExecutor,
             @Value("${deployhub.work-dir}") String workDir,
             @Value("${deployhub.download.concurrency:3}") int downloadConcurrency,
@@ -74,6 +75,7 @@ public class PackageDownloadService {
         this.ncrRegistryClient = ncrRegistryClient;
         this.ncrProperties = ncrProperties;
         this.retryProperties = retryProperties;
+        this.objectMapper = objectMapper;
         this.downloadExecutor = downloadExecutor;
         this.workDir = workDir;
         this.downloadConcurrency = downloadConcurrency;
@@ -336,7 +338,7 @@ public class PackageDownloadService {
                 log.warn("파일 권한 설정을 지원하지 않는 파일시스템입니다 — 권한 제한 없이 진행합니다: {}", authFile);
             }
             // 자격 증명에 따옴표·역슬래시가 섞여도 깨지지 않게 문자열 조립 대신 Jackson으로 직렬화한다.
-            Files.writeString(authFile, JSON_MAPPER.writeValueAsString(content));
+            Files.writeString(authFile, objectMapper.writeValueAsString(content));
             return new AuthFile(authFile, authValue);
         } catch (IOException e) {
             throw new IllegalStateException("skopeo 인증 파일을 만들 수 없습니다.", e);
