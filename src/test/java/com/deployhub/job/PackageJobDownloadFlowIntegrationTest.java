@@ -357,22 +357,49 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         return response.headers().firstValue("Docker-Content-Digest").orElseThrow();
     }
 
+    /**
+     * 레지스트리가 404로 "없다"고 답한 태그는 생성 응답에서 바로 거절한다 — 201을 주고 비동기로
+     * 실패시키면 호출측이 성공으로 오해하고 폴링에 들어간다.
+     */
     @Test
-    void 존재하지_않는_태그는_검증_단계에서_FAILED로_처리된다() {
+    void 존재하지_않는_태그로는_Job_생성이_400으로_거절된다() {
         String versionName = "2026.20.02";
         String missingTag = TEST_REPOSITORY + ":does-not-exist";
         registerMainVersion(versionName);
         registerAndSubmitSubVersion(versionName, "test", "1.0.0", List.of(missingTag));
 
-        ResponseEntity<PackageJobDetailResponse> created = createPackageJob(versionName, List.of(missingTag));
-        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        ResponseEntity<String> created = restTemplate.postForEntity(
+                "/api/main-versions/{versionName}/package-job",
+                new PackageJobCreateRequest(List.of(missingTag), false),
+                String.class,
+                versionName);
 
-        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
-            PackageJobDetailResponse polled = getJob(versionName).getBody();
-            assertThat(polled.job().status()).isEqualTo("FAILED");
-            assertThat(polled.items().get(0).status()).isEqualTo("FAILED");
-            assertThat(polled.items().get(0).errorMessage()).contains("E-0501");
-        });
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(created.getBody()).contains("E-0308").contains(missingTag);
+
+        // 사유는 항목에도 남아 화면이 어느 태그가 문제인지 보여줄 수 있어야 한다.
+        PackageJobDetailResponse polled = getJob(versionName).getBody();
+        assertThat(polled.job().status()).isEqualTo("FAILED");
+        assertThat(polled.items().get(0).errorMessage()).contains("E-0501");
+    }
+
+    /** 재시도도 같은 판정을 써야 한다 — 갈라지면 같은 오타가 생성은 400, 재시도는 200이 된다. */
+    @Test
+    void 존재하지_않는_태그로는_재시도도_400으로_거절된다() {
+        String versionName = "2026.20.05";
+        String missingTag = TEST_REPOSITORY + ":does-not-exist";
+        registerMainVersion(versionName);
+        registerAndSubmitSubVersion(versionName, "test", "1.0.0", List.of(missingTag));
+        createPackageJob(versionName, List.of(missingTag)); // 생성에서 이미 FAILED로 떨어진다
+
+        ResponseEntity<String> retried = restTemplate.postForEntity(
+                "/api/package-jobs/{versionName}/retry",
+                new PackageItemRetryRequest(List.of(missingTag), false),
+                String.class,
+                versionName);
+
+        assertThat(retried.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(retried.getBody()).contains("E-0308");
     }
 
     @Test

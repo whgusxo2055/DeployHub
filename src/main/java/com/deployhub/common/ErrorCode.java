@@ -51,6 +51,9 @@ public enum ErrorCode {
             "E-0305", HttpStatus.CONFLICT, "제출 대기(PENDING) 상태인 담당 영역이 있어 패키징을 시작할 수 없습니다."),
     PACKAGE_JOB_NOT_FOUND("E-0306", HttpStatus.NOT_FOUND, "패키지 Job을 찾을 수 없습니다."),
     INVALID_QUERY_PARAMETER("E-0307", HttpStatus.BAD_REQUEST, "요청 파라미터 형식이 올바르지 않습니다."),
+    // 생성 응답 안에서 검증을 끝내므로 이 코드가 곧 "Job을 만들지 않았다"는 뜻이다.
+    IMAGE_TAG_MISSING_IN_REGISTRY(
+            "E-0308", HttpStatus.BAD_REQUEST, "레지스트리에서 확인되지 않는 image_tag가 있어 패키징을 시작할 수 없습니다."),
 
     // E-04xx 외부 저장소 연동 (NCR: 0401·0402·0404, Graph: 0451~0453)
     REGISTRY_UNAUTHORIZED("E-0401", HttpStatus.UNAUTHORIZED, "레지스트리 인증에 실패했습니다."),

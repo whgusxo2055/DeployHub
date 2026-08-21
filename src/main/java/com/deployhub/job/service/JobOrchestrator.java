@@ -13,8 +13,7 @@ import org.springframework.stereotype.Service;
 /**
  * Job 단계 순차 실행. {@code @Transactional}을 붙이지 않는다 — 긴 트랜잭션을 피하고
  * 폴링 클라이언트가 단계 중간 상태를 볼 수 있어야 한다.
- * {@link #start}는 VALIDATING부터, {@link #resume}(수동 재시도)은 DOWNLOADING부터 재개한다 —
- * 이미 받은 항목을 다시 받지 않기 위해서다. 대신 매니페스트 컨텍스트가 없어 항목별로 즉석 조회한다.
+ * 생성·재시도 모두 검증을 응답 안에서 끝내고 오므로 진입점은 하나이고 항상 DOWNLOADING부터다.
  */
 @Slf4j
 @Service
@@ -22,27 +21,15 @@ import org.springframework.stereotype.Service;
 public class JobOrchestrator {
 
     private final PackageJobService packageJobService;
-    private final PackageValidationService packageValidationService;
     private final PackageDownloadService packageDownloadService;
     private final GraphFolderService graphFolderService;
     private final GraphUploadService graphUploadService;
 
+    /** 검증은 호출자가 이미 끝냈다 — 그때 얻은 매니페스트 컨텍스트를 받아 재조회를 아낀다. */
     @Async("jobExecutor")
-    public void start(String versionName) {
+    public void startValidated(String versionName, Map<String, ManifestInfo> manifestContext) {
         try {
-            packageJobService.changeStatus(versionName, JobStatus.VALIDATING);
-            Map<String, ManifestInfo> manifestContext = packageValidationService.validate(versionName);
-
             proceedFromDownloading(versionName, manifestContext);
-        } catch (Exception e) {
-            handleFailure(versionName, e);
-        }
-    }
-
-    @Async("jobExecutor")
-    public void resume(String versionName) {
-        try {
-            proceedFromDownloading(versionName, Map.of());
         } catch (Exception e) {
             handleFailure(versionName, e);
         }
