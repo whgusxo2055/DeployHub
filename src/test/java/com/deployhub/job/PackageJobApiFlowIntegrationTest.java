@@ -335,7 +335,9 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
 
     private void registerAndSubmitSubVersion(String versionName, String code, String version, List<String> imageTags) {
         // 값 등록과 제출을 한 요청으로 한다 — 상태는 요청 본문이 선언한다.
-        putSubVersion(versionName, new SubVersionUpsertRequest(code, version, null, 1, SubmitStatus.UPDATED, imageTags));
+        // null은 "기본 태그" 뜻이다 — 서비스의 code:version 자동생성이 없어져 픽스처가 직접 만든다.
+        List<String> tags = imageTags == null ? List.of("%s:%s".formatted(code, version)) : imageTags;
+        putSubVersion(versionName, new SubVersionUpsertRequest(code, version, null, 1, SubmitStatus.UPDATED, tags));
     }
 
     private ResponseEntity<SubVersionSavedResponse> putSubVersion(String versionName, SubVersionUpsertRequest item) {
