@@ -84,13 +84,12 @@ public class SubVersionService {
     }
 
     /**
-     * 컴포넌트 미지정 시 {@code code:version} 1건을 자동 생성한다. 이 값이 NCR REST 경로와 skopeo
-     * 인자로 그대로 들어가므로 {@link ImageReference#parse}로 여기서 문법을 강제한다.
+     * 컴포넌트(도커 이미지)가 없는 서브버전(예: EXT)도 정상 상태다 — imageTags를 비우면 컴포넌트를
+     * 만들지 않는다. 값이 있으면 NCR REST 경로와 skopeo 인자로 그대로 들어가므로
+     * {@link ImageReference#parse}로 여기서 문법을 강제한다.
      */
     private List<String> resolveImageTags(SubVersionUpsertRequest request) {
-        List<String> tags = (request.imageTags() == null || request.imageTags().isEmpty())
-                ? List.of("%s:%s".formatted(request.code(), request.version()))
-                : request.imageTags();
+        List<String> tags = request.imageTags() == null ? List.of() : request.imageTags();
         // 같은 서브버전 안의 중복은 유일성 검사(서로 다른 code 기준)를 통과해버린다 —
         // 저장은 같은 PK로 두 번 일어나 1건이 되고 응답에는 2건이 실려 DB와 어긋난다.
         if (Set.copyOf(tags).size() != tags.size()) {

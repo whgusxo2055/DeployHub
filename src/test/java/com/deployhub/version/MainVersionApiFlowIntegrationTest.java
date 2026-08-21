@@ -79,14 +79,16 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(created.getBody().releaseNote()).isEqualTo("릴리즈 노트");
 
-        // 2. 서브버전 등록 — 컴포넌트 미지정 → {code}:{version} 1건 자동 생성
+        // 2. 서브버전 등록 — 컴포넌트 명시 등록
         ResponseEntity<SubVersionSavedResponse> saved = putSubVersion(
-                versionName, new SubVersionUpsertRequest("pips", "1.0.22.0300", "변경 사항", 1, SubmitStatus.PENDING, null));
+                versionName,
+                new SubVersionUpsertRequest(
+                        "pips", "1.0.22.0300", "변경 사항", 1, SubmitStatus.PENDING, List.of("pips:1.0.22.0300")));
         assertThat(saved.getStatusCode()).isEqualTo(HttpStatus.OK);
         SubVersionSavedResponse savedSubVersion = saved.getBody();
         assertThat(savedSubVersion.imageTags()).containsExactly("pips:1.0.22.0300");
 
-        // 3. 계층 조회 — 컴포넌트 자동 생성 확인
+        // 3. 계층 조회 — 컴포넌트 등록 확인
         ResponseEntity<MainVersionDetailResponse> detail = restTemplate.getForEntity(
                 "/api/main-versions/{versionName}", MainVersionDetailResponse.class, versionName);
         assertThat(detail.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -134,6 +136,24 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
                 versionName);
         assertThat(afterRetag.getBody().eligible()).isFalse();
         assertThat(afterRetag.getBody().blockingSubVersionCodes()).containsExactly("pips");
+    }
+
+    /** EXT처럼 도커 이미지가 없는 서브버전 — imageTags를 비우면 컴포넌트도 안 만들고 레지스트리도 안 묻는다. */
+    @Test
+    void imageTags를_비우면_컴포넌트_없이_저장되고_등록이_막히지_않는다() {
+        String versionName = "2026.09.04";
+        restTemplate.postForEntity(
+                "/api/main-versions", new MainVersionCreateRequest(versionName, null, null), MainVersionInfoResponse.class);
+
+        ResponseEntity<SubVersionSavedResponse> saved = putSubVersion(
+                versionName, new SubVersionUpsertRequest("ext", "v0.8.1", null, 1, SubmitStatus.UPDATED, null));
+
+        assertThat(saved.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(saved.getBody().imageTags()).isEmpty();
+
+        ResponseEntity<MainVersionDetailResponse> detail = restTemplate.getForEntity(
+                "/api/main-versions/{versionName}", MainVersionDetailResponse.class, versionName);
+        assertThat(detail.getBody().subVersions().get(0).components()).isEmpty();
     }
 
     @Test
