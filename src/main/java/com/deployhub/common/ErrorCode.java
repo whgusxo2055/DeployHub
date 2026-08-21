@@ -40,7 +40,8 @@ public enum ErrorCode {
     SUB_VERSION_STATUS_CONTRADICTION(
             "E-0208",
             HttpStatus.BAD_REQUEST,
-            "값이 달라졌으므로 변경 없음으로 제출할 수 없습니다. 최신 값을 다시 조회하세요."),
+            "값이 변경되었습니다. 의도한 변경이면 확인 상태를 UPDATED로 바꿔 저장하고,"
+                    + " 아니면 최신 값을 다시 조회하세요."),
 
     // E-03xx 매니페스트 확정 / Job 생성
     INVALID_IMAGE_TAG_SELECTION(
@@ -58,7 +59,7 @@ public enum ErrorCode {
     // E-04xx 외부 저장소 연동 (NCR: 0401·0402·0404, Graph: 0451~0453)
     REGISTRY_UNAUTHORIZED("E-0401", HttpStatus.UNAUTHORIZED, "레지스트리 인증에 실패했습니다."),
     REGISTRY_TIMEOUT("E-0402", HttpStatus.GATEWAY_TIMEOUT, "레지스트리 호출이 시간 초과되었습니다."),
-    REGISTRY_UNREACHABLE("E-0404", HttpStatus.BAD_GATEWAY, "NCR Private Endpoint에 연결할 수 없습니다."),
+    REGISTRY_UNREACHABLE("E-0404", HttpStatus.BAD_GATEWAY, "레지스트리에 연결할 수 없습니다."),
     // 항목 실패로도 그대로 쓴다 — 업로드 단계에서 같은 사유가 나면 문구가 같아야 한다.
     GRAPH_TOKEN_ISSUE_FAILED("E-0451", HttpStatus.BAD_GATEWAY, "Microsoft Graph 토큰 발급에 실패했습니다."),
     GRAPH_FORBIDDEN("E-0452", HttpStatus.FORBIDDEN, "Microsoft Graph 권한이 부족합니다."),
@@ -66,14 +67,15 @@ public enum ErrorCode {
 
     // E-05xx 항목 검증
     INVALID_IMAGE_TAG("E-0501", "image_tag 형식이 올바르지 않습니다."),
-    IMAGE_NOT_FOUND("E-0501", "레지스트리에 이미지가 존재하지 않습니다."),
+    IMAGE_NOT_FOUND("E-0501", "레지스트리에 해당 image_tag가 없습니다."),
     MANIFEST_LOOKUP_TIMEOUT("E-0503", "레지스트리 응답 시간 초과로 누락 처리했습니다."),
     MANIFEST_LOOKUP_UNAVAILABLE("E-0503", "레지스트리에 연결할 수 없어 누락 처리했습니다."),
 
     // E-06xx 다운로드
     SKOPEO_FAILED("E-0601", "이미지 다운로드에 실패했습니다."),
     SKOPEO_TIMEOUT("E-0606", "이미지 다운로드가 시간 초과되었습니다."),
-    SKOPEO_NOT_EXECUTABLE("E-0605", "skopeo를 실행할 수 없습니다."),
+    // 무인증 응답에 실리므로 도구 이름을 숨긴다 — 진단용 원문은 로그에만 남는다(OPERATIONS.md E-0605).
+    SKOPEO_NOT_EXECUTABLE("E-0605", "이미지 다운로드 도구를 실행할 수 없습니다."),
     DIGEST_MISMATCH("E-0603", "다운로드된 이미지의 digest가 확정 시점과 다릅니다(재푸시 의심). 자동 재시도 대상이 아닙니다."),
     // "재푸시됨"과 "확인할 수 없음"은 운영 대응이 다르다 — 전자는 재확정, 후자는 그냥 재시도다.
     DIGEST_UNVERIFIABLE("E-0607", "다운로드 직후 digest를 재확인하지 못했습니다."),
