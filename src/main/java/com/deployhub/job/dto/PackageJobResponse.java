@@ -18,9 +18,10 @@ public record PackageJobResponse(
         int completedItems,
         int progress,
         String spFolderUrl,
-        String createdBy,
         Instant createdAt,
-        Instant finishedAt) {
+        Instant finishedAt,
+        // 정리된 Job인지 구분할 유일한 수단이다 — 없으면 폴더가 지워진 Job도 DONE으로만 보인다.
+        Instant deletedAt) {
 
     private static final Set<PackageItemStatus> COMPLETED_STATUSES =
             EnumSet.of(PackageItemStatus.DOWNLOADED, PackageItemStatus.UPLOADED);
@@ -38,9 +39,9 @@ public record PackageJobResponse(
                 .completedItems((int) completed)
                 .progress(total == 0 ? 0 : (int) (completed * 100 / total))
                 .spFolderUrl(job.getSpFolderUrl())
-                .createdBy(job.getCreatedBy())
                 .createdAt(job.getCreatedAt())
                 .finishedAt(job.getFinishedAt())
+                .deletedAt(job.getDeletedAt())
                 .build();
     }
 }

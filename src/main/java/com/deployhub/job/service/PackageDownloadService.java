@@ -1,7 +1,7 @@
 package com.deployhub.job.service;
 
+import com.deployhub.common.ErrorCode;
 import com.deployhub.common.BoundedParallelism;
-import com.deployhub.common.ItemErrorCode;
 import com.deployhub.common.CredentialMasker;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
@@ -50,12 +50,12 @@ public class PackageDownloadService {
             "(?i)unauthorized|forbidden|\\b401\\b|\\b403\\b|\\b404\\b|manifest unknown|not found|no space left");
     private static final int STDERR_CAPTURE_LIMIT = 8192;
     // Boot 빈이 아니라 기본 설정 매퍼 — authfile 직렬화 전용이라 Spring 컨텍스트 설정과 무관해야 한다.
-    private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
 
     private final PackageItemRepository packageItemRepository;
     private final NcrRegistryClient ncrRegistryClient;
     private final NcrProperties ncrProperties;
     private final RetryProperties retryProperties;
+    private final ObjectMapper objectMapper;
     private final Executor downloadExecutor;
     private final String workDir;
     private final int downloadConcurrency;
@@ -66,6 +66,7 @@ public class PackageDownloadService {
             NcrRegistryClient ncrRegistryClient,
             NcrProperties ncrProperties,
             RetryProperties retryProperties,
+            ObjectMapper objectMapper,
             @Qualifier("downloadExecutor") Executor downloadExecutor,
             @Value("${deployhub.work-dir}") String workDir,
             @Value("${deployhub.download.concurrency:3}") int downloadConcurrency,
@@ -74,6 +75,7 @@ public class PackageDownloadService {
         this.ncrRegistryClient = ncrRegistryClient;
         this.ncrProperties = ncrProperties;
         this.retryProperties = retryProperties;
+        this.objectMapper = objectMapper;
         this.downloadExecutor = downloadExecutor;
         this.workDir = workDir;
         this.downloadConcurrency = downloadConcurrency;
@@ -94,7 +96,7 @@ public class PackageDownloadService {
         try {
             Files.createDirectories(imagesDir);
         } catch (IOException e) {
-            throw new IllegalStateException("E-0602: 작업 디렉터리를 만들 수 없습니다: " + imagesDir, e);
+            throw new IllegalStateException(ErrorCode.WORK_DIR_CREATE_FAILED.toLogMessage(imagesDir), e);
         }
         checkDiskSpace(imagesDir, manifestContext, targets);
 
@@ -137,8 +139,8 @@ public class PackageDownloadService {
         long required = (long) (expectedTotal * REQUIRED_FREE_SPACE_RATIO);
         long usable = imagesDir.toFile().getUsableSpace();
         if (usable < required) {
-            log.warn("E-0602 디스크 여유 공간 부족: required={} bytes, usable={} bytes", required, usable);
-            throw new IllegalStateException("E-0602: 디스크 여유 공간이 부족합니다.");
+            log.warn("{} required={} bytes, usable={} bytes", ErrorCode.INSUFFICIENT_DISK.toMessage(), required, usable);
+            throw new IllegalStateException(ErrorCode.INSUFFICIENT_DISK.toMessage());
         }
     }
 
@@ -148,12 +150,12 @@ public class PackageDownloadService {
             ref = ImageReference.parse(item.getImageTag());
         } catch (IllegalArgumentException e) {
             // 형식 오류는 항목 실패로 국한한다. 재시도 경로는 VALIDATING을 건너뛰어 이 방어가 실제로 쓰인다.
-            return failItem(item, ItemErrorCode.INVALID_IMAGE_TAG, e.getMessage());
+            return failItem(item, ErrorCode.INVALID_IMAGE_TAG, e.getMessage());
         }
 
         ManifestInfo expected = manifestInfo != null ? manifestInfo : fetchManifestSafely(ref, item.getImageTag());
         if (expected == null) {
-            return failItem(item, ItemErrorCode.IMAGE_NOT_FOUND, null);
+            return failItem(item, ErrorCode.IMAGE_NOT_FOUND, null);
         }
 
         Path tarPath = imagesDir.resolve(ref.tarFileName());
@@ -177,7 +179,7 @@ public class PackageDownloadService {
                         item,
                         result.errorCode() != null
                                 ? result.errorCode()
-                                : (result.timedOut() ? ItemErrorCode.SKOPEO_TIMEOUT : ItemErrorCode.SKOPEO_FAILED),
+                                : (result.timedOut() ? ErrorCode.SKOPEO_TIMEOUT : ErrorCode.SKOPEO_FAILED),
                         "exit=%d, stderr=%s".formatted(result.exitCode(), maskedStderr));
             }
             attempt++;
@@ -205,7 +207,7 @@ public class PackageDownloadService {
             deleteQuietly(tarPath);
             return failItem(
                     item,
-                    current == null ? ItemErrorCode.DIGEST_UNVERIFIABLE : ItemErrorCode.DIGEST_MISMATCH,
+                    current == null ? ErrorCode.DIGEST_UNVERIFIABLE : ErrorCode.DIGEST_MISMATCH,
                     "expected=%s, current=%s".formatted(expectedDigest, currentDigest));
         }
 
@@ -214,11 +216,11 @@ public class PackageDownloadService {
             fileSize = Files.size(tarPath);
         } catch (IOException e) {
             deleteQuietly(tarPath);
-            return failItem(item, ItemErrorCode.ARCHIVE_UNREADABLE, e.getMessage());
+            return failItem(item, ErrorCode.ARCHIVE_UNREADABLE, e.getMessage());
         }
         if (fileSize == 0) {
             deleteQuietly(tarPath);
-            return failItem(item, ItemErrorCode.ARCHIVE_EMPTY, null);
+            return failItem(item, ErrorCode.ARCHIVE_EMPTY, null);
         }
 
         item.markDownloaded(fileSize);
@@ -226,7 +228,7 @@ public class PackageDownloadService {
         return true;
     }
 
-    private boolean failItem(PackageItem item, ItemErrorCode errorCode, String detail) {
+    private boolean failItem(PackageItem item, ErrorCode errorCode, String detail) {
         return PackageItemFailure.fail(packageItemRepository, item, errorCode, detail);
     }
 
@@ -309,7 +311,7 @@ public class PackageDownloadService {
         } catch (IOException e) {
             // StartupChecks가 조기 검출하지만 기동 이후 경로가 사라지는 경우를 방어한다.
             // 바이너리 누락은 재시도해도 소용없다 — 코드를 함께 실어 백오프를 건너뛰게 한다.
-            return new SkopeoResult(-1, e.getMessage(), false, ItemErrorCode.SKOPEO_NOT_EXECUTABLE);
+            return new SkopeoResult(-1, e.getMessage(), false, ErrorCode.SKOPEO_NOT_EXECUTABLE);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("다운로드 대기 중 인터럽트되었습니다.", e);
@@ -336,7 +338,7 @@ public class PackageDownloadService {
                 log.warn("파일 권한 설정을 지원하지 않는 파일시스템입니다 — 권한 제한 없이 진행합니다: {}", authFile);
             }
             // 자격 증명에 따옴표·역슬래시가 섞여도 깨지지 않게 문자열 조립 대신 Jackson으로 직렬화한다.
-            Files.writeString(authFile, JSON_MAPPER.writeValueAsString(content));
+            Files.writeString(authFile, objectMapper.writeValueAsString(content));
             return new AuthFile(authFile, authValue);
         } catch (IOException e) {
             throw new IllegalStateException("skopeo 인증 파일을 만들 수 없습니다.", e);
@@ -381,7 +383,7 @@ public class PackageDownloadService {
     }
 
     /** {@code errorCode}가 있으면 stderr 분류보다 우선한다(예: 바이너리 자체가 없는 경우). */
-    private record SkopeoResult(int exitCode, String stderr, boolean timedOut, ItemErrorCode errorCode) {
+    private record SkopeoResult(int exitCode, String stderr, boolean timedOut, ErrorCode errorCode) {
 
         SkopeoResult(int exitCode, String stderr, boolean timedOut) {
             this(exitCode, stderr, timedOut, null);

@@ -30,7 +30,7 @@ import org.springframework.web.client.RestClient;
 class GraphFolderServiceTest {
 
     private static final GraphProperties PROPERTIES =
-            new GraphProperties("tenant", "client", "secret", "site-1", "drive-1", "/Deploy/Packages");
+            new GraphProperties("tenant", "client", "drive-1", "/Deploy/Packages");
     private static final String BASE = "https://graph.microsoft.com/v1.0";
 
     private MockRestServiceServer server;

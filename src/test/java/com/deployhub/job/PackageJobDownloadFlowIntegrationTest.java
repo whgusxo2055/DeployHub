@@ -12,9 +12,7 @@ import com.deployhub.support.MySqlContainerSupport;
 import com.deployhub.version.dto.MainVersionCreateRequest;
 import com.deployhub.version.dto.MainVersionInfoResponse;
 import com.deployhub.version.dto.SubVersionSavedResponse;
-import com.deployhub.version.dto.SubVersionUpsertBatchRequest;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
-import com.deployhub.version.dto.SubmitStatusChangeRequest;
 import com.deployhub.version.entity.SubmitStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -222,8 +220,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(finalState.items().get(0).status()).isEqualTo("DOWNLOADED");
         assertThat(finalState.items().get(0).fileSize()).isGreaterThan(0);
 
-        // 파일명은 ImageReference.tarFileName()이 해시 접미사까지 붙여 만든다(충돌 방지,
-        // 코드리뷰로 발견된 버그의 수정) — 여기서 그 로직을 그대로 재계산하는 대신,
+        // 파일명 규칙(ImageReference.tarFileName)을 여기서 그대로 재계산하는 대신,
         // images/ 아래 실제로 만들어진 .tar 하나를 그대로 찾아서 쓴다.
         Path imagesDir = Path.of(workDir, versionName, "images");
         List<Path> tarFiles;
@@ -360,22 +357,49 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         return response.headers().firstValue("Docker-Content-Digest").orElseThrow();
     }
 
+    /**
+     * 레지스트리가 404로 "없다"고 답한 태그는 생성 응답에서 바로 거절한다 — 201을 주고 비동기로
+     * 실패시키면 호출측이 성공으로 오해하고 폴링에 들어간다.
+     */
     @Test
-    void 존재하지_않는_태그는_검증_단계에서_FAILED로_처리된다() {
+    void 존재하지_않는_태그로는_Job_생성이_400으로_거절된다() {
         String versionName = "2026.20.02";
         String missingTag = TEST_REPOSITORY + ":does-not-exist";
         registerMainVersion(versionName);
         registerAndSubmitSubVersion(versionName, "test", "1.0.0", List.of(missingTag));
 
-        ResponseEntity<PackageJobDetailResponse> created = createPackageJob(versionName, List.of(missingTag));
-        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        ResponseEntity<String> created = restTemplate.postForEntity(
+                "/api/main-versions/{versionName}/package-job",
+                new PackageJobCreateRequest(List.of(missingTag), false),
+                String.class,
+                versionName);
 
-        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
-            PackageJobDetailResponse polled = getJob(versionName).getBody();
-            assertThat(polled.job().status()).isEqualTo("FAILED");
-            assertThat(polled.items().get(0).status()).isEqualTo("FAILED");
-            assertThat(polled.items().get(0).errorMessage()).contains("E-0501");
-        });
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(created.getBody()).contains("E-0308").contains(missingTag);
+
+        // 사유는 항목에도 남아 화면이 어느 태그가 문제인지 보여줄 수 있어야 한다.
+        PackageJobDetailResponse polled = getJob(versionName).getBody();
+        assertThat(polled.job().status()).isEqualTo("FAILED");
+        assertThat(polled.items().get(0).errorMessage()).contains("E-0501");
+    }
+
+    /** 재시도도 같은 판정을 써야 한다 — 갈라지면 같은 오타가 생성은 400, 재시도는 200이 된다. */
+    @Test
+    void 존재하지_않는_태그로는_재시도도_400으로_거절된다() {
+        String versionName = "2026.20.05";
+        String missingTag = TEST_REPOSITORY + ":does-not-exist";
+        registerMainVersion(versionName);
+        registerAndSubmitSubVersion(versionName, "test", "1.0.0", List.of(missingTag));
+        createPackageJob(versionName, List.of(missingTag)); // 생성에서 이미 FAILED로 떨어진다
+
+        ResponseEntity<String> retried = restTemplate.postForEntity(
+                "/api/package-jobs/{versionName}/retry",
+                new PackageItemRetryRequest(List.of(missingTag), false),
+                String.class,
+                versionName);
+
+        assertThat(retried.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(retried.getBody()).contains("E-0308");
     }
 
     @Test
@@ -389,7 +413,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         // 없으면 E-0703(작업 디렉터리 소실)로 막혀 이 테스트의 의도(대상 선정)를 못 본다.
         Files.createDirectories(Path.of(workDir, versionName, "images"));
         jdbcTemplate.update(
-                "INSERT INTO package_job (version_name, status, created_by) VALUES (?, 'FAILED', 'tester')", versionName);
+                "INSERT INTO package_job (version_name, status) VALUES (?, 'FAILED')", versionName);
         jdbcTemplate.update(
                 "INSERT INTO package_item (version_name, image_tag, status, error_message) VALUES (?, ?, 'FAILED', 'E-0601: 이전 실패')",
                 versionName,
@@ -417,7 +441,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         String versionName = "2026.20.04";
         registerMainVersion(versionName);
         jdbcTemplate.update(
-                "INSERT INTO package_job (version_name, status, created_by) VALUES (?, 'DONE', 'tester')", versionName);
+                "INSERT INTO package_job (version_name, status) VALUES (?, 'DONE')", versionName);
 
         ResponseEntity<String> response = restTemplate.postForEntity(
                 "/api/package-jobs/{versionName}/retry",
@@ -434,9 +458,11 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         String versionName = "2026.20.05";
         registerMainVersion(versionName);
         jdbcTemplate.update(
-                "INSERT INTO package_job (version_name, status, created_by) VALUES (?, 'FAILED', 'tester')", versionName);
+                "INSERT INTO package_job (version_name, status) VALUES (?, 'FAILED')", versionName);
+        // DOWNLOADED여야 "받아 둔 tar가 있었는데 사라졌다"가 된다 — FAILED뿐이면 애초에 받은 적이
+        // 없는 상태라(VALIDATING 실패 등) 소실이 아니고, 그건 force 없이 재시도돼야 한다.
         jdbcTemplate.update(
-                "INSERT INTO package_item (version_name, image_tag, status) VALUES (?, ?, 'FAILED')",
+                "INSERT INTO package_item (version_name, image_tag, status) VALUES (?, ?, 'DOWNLOADED')",
                 versionName,
                 testImageTag);
         // work-dir 아래 이 버전 디렉터리를 아예 만들지 않는다 — 소실 상태를 그대로 재현한다.
@@ -458,27 +484,20 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
     }
 
     private void registerAndSubmitSubVersion(String versionName, String code, String version, List<String> imageTags) {
-        ResponseEntity<SubVersionSavedResponse[]> saved = restTemplate.exchange(
-                "/api/main-versions/{versionName}/sub-versions",
+        ResponseEntity<SubVersionSavedResponse> saved = restTemplate.exchange(
+                "/api/main-versions/{versionName}/sub-versions/{code}",
                 HttpMethod.PUT,
-                new HttpEntity<>(new SubVersionUpsertBatchRequest(
-                        List.of(new SubVersionUpsertRequest(code, version, null, 1, imageTags)))),
-                SubVersionSavedResponse[].class,
-                versionName);
+                new HttpEntity<>(new SubVersionUpsertRequest(code, version, null, 1, SubmitStatus.UPDATED, imageTags)),
+                SubVersionSavedResponse.class,
+                versionName,
+                code);
         assertThat(saved.getStatusCode()).isEqualTo(HttpStatus.OK);
-        Long id = saved.getBody()[0].id();
-        restTemplate.exchange(
-                "/api/sub-versions/{id}/submit-status",
-                HttpMethod.PATCH,
-                new HttpEntity<>(new SubmitStatusChangeRequest(SubmitStatus.UPDATED)),
-                Void.class,
-                id);
     }
 
     private ResponseEntity<PackageJobDetailResponse> createPackageJob(String versionName, List<String> imageTags) {
         return restTemplate.postForEntity(
                 "/api/main-versions/{versionName}/package-job",
-                new PackageJobCreateRequest(imageTags, "tester", false),
+                new PackageJobCreateRequest(imageTags, false),
                 PackageJobDetailResponse.class,
                 versionName);
     }

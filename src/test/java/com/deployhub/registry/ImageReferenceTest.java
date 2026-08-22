@@ -33,7 +33,6 @@ class ImageReferenceTest {
                 "acme/x:1?y=1", // 쿼리 인젝션
                 "acme/x:1#frag", // 프래그먼트
                 "acme/x:{tpl}", // Spring URI 템플릿 변수
-                "ACME/X:1", // 대문자(distribution은 소문자만)
                 "acme x:1", // 공백
                 "acme/x:", // 빈 태그
                 ":1", // 빈 저장소
@@ -44,20 +43,25 @@ class ImageReferenceTest {
         assertThatThrownBy(() -> ImageReference.parse(imageTag)).isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** distribution 문법이 허용하는 구분자 — 좁게 잡으면 유효한 저장소명이 등록에서 막힌다. */
+    /** 형식 강제는 레지스트리 조회(E-0206)가 대신한다 — 여기서 좁게 잡으면 유효한 이름이 등록에서 막힌다. */
     @ParameterizedTest
-    @ValueSource(strings = {"foo__bar:1", "a--b:1", "acme/sub-ns/x:1.0", "a.b_c:v1"})
+    @ValueSource(strings = {"foo__bar:1", "a--b:1", "acme/sub-ns/x:1.0", "a.b_c:v1", "ACME/X:1"})
     void distribution_문법의_구분자를_허용한다(String imageTag) {
         assertThat(ImageReference.parse(imageTag).tag()).isNotBlank();
     }
 
     @Test
-    void tarFileName은_슬래시와_콜론이_뒤섞여도_충돌하지_않는다() {
-        // "a/b:1"과 "a_b:1"은 '/'·':' 치환만으로는 같은 파일명("a_b_1")이 된다 — 해시
-        // 접미사가 그 충돌을 없애는지 검증한다(코드리뷰로 발견된 버그의 회귀 방지).
-        String nameWithSlash = ImageReference.parse("a/b:1").tarFileName();
-        String nameWithUnderscore = ImageReference.parse("a_b:1").tarFileName();
+    void tarFileName은_슬래시와_콜론을_언더스코어로_치환한다() {
+        // 구현계획서 FN-06-1의 규격 그대로다 — 접미사를 붙이지 않는다.
+        assertThat(ImageReference.parse("acme/sb-cc-api:v2.0.25.8612").tarFileName())
+                .isEqualTo("acme_sb-cc-api_v2.0.25.8612.tar");
+    }
 
-        assertThat(nameWithSlash).isNotEqualTo(nameWithUnderscore);
+    @Test
+    void tarFileName은_단사가_아니다() {
+        // 이 충돌을 파일명으로 피하지 않고 확정 시점에 거부한다 — 거부 동작은
+        // PackageJobApiFlowIntegrationTest.파일명이_겹치는_태그_조합은_E_0301로_거부된다가 지킨다.
+        assertThat(ImageReference.parse("a/b:1").tarFileName())
+                .isEqualTo(ImageReference.parse("a_b:1").tarFileName());
     }
 }

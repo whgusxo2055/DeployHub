@@ -12,6 +12,7 @@ import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Base64;
@@ -44,7 +45,9 @@ class NcrRegistryClientTest {
         server = MockRestServiceServer.bindTo(builder).build();
         RetryExecutor retryExecutor =
                 new RetryExecutor(new RetryProperties(1, List.of(Duration.ofMillis(1))), duration -> {});
-        client = new NcrRegistryClient(PROPERTIES, retryExecutor, builder);
+        // 프로덕션은 관대한 주입 매퍼지만 여기서는 일부러 엄격한 기본 매퍼를 쓴다 —
+        // TokenResponse의 @JsonIgnoreProperties가 사라지는 걸 잡는 유일한 가드다.
+        client = new NcrRegistryClient(PROPERTIES, retryExecutor, new ObjectMapper(), builder);
     }
 
     @Test
@@ -142,6 +145,24 @@ class NcrRegistryClientTest {
                         .header(
                                 HttpHeaders.WWW_AUTHENTICATE,
                                 "Bearer realm=\"https://ncr.example.com/auth/token\",service=\"ncr\""));
+    }
+
+    @Test
+    void 토큰_엔드포인트의_5xx는_인증_실패가_아니라_재시도_대상이다() {
+        // auth 서비스 장애를 E-0401로 분류하면 RetryExecutor가 재시도하지 않고,
+        // ImageTagChecker가 401만 그대로 올리므로 Job 전체가 "인증 실패"로 죽는다.
+        // 재시도 대상이 되면 RetryExecutor가 maxRetries(1)만큼 더 돌고, 소진 후 giveUpException을 던진다.
+        for (int attempt = 0; attempt < 2; attempt++) {
+            expectChallenge();
+            server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr"))
+                    .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+        }
+
+        assertThatThrownBy(() -> client.getManifest(new ImageReference("repo", "v1")))
+                .isInstanceOf(ApiException.class)
+                .extracting(ex -> ((ApiException) ex).getErrorCode())
+                .isEqualTo(ErrorCode.REGISTRY_TIMEOUT);
+        server.verify();
     }
 
     @Test

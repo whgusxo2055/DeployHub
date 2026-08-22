@@ -235,14 +235,15 @@ public class GraphApiClient {
      */
     private <T> T authenticated(String path, Function<String, T> call) {
         RelativePathGuard.requireRelative(path);
+        String token = tokenService.getAccessToken();
         try {
-            return call.apply(tokenService.getAccessToken());
+            return call.apply(token);
         } catch (RestClientResponseException ex) {
             if (ex.getStatusCode().value() != 401) {
                 throw classify(ex, path);
             }
             log.warn("Graph 인증 실패, 토큰을 무효화하고 한 번 재시도합니다.");
-            tokenService.invalidate();
+            tokenService.invalidate(token);
         } catch (ResourceAccessException ex) {
             throw timeoutRetryable(path, ex);
         }

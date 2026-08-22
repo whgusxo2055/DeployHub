@@ -1,5 +1,6 @@
 package com.deployhub.config;
 
+import com.deployhub.common.ErrorCode;
 import com.deployhub.registry.NcrProperties;
 import com.deployhub.registry.NcrRegistryClient;
 import com.deployhub.sharepoint.GraphApiClient;
@@ -30,13 +31,6 @@ public class StartupChecks implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        // NcrRegistryClient가 테스트용 평문 HTTP 스킴을 허용하므로, 운영에 http://가 들어가면
-        // Basic 헤더와 --src-tls-verify=false가 무방비로 나간다 — endpoint에도 HTTPS를 강제한다.
-        if (ncrProperties.endpoint().regionMatches(true, 0, "http://", 0, 7)) {
-            throw new IllegalStateException(
-                    "NCR_ENDPOINT가 평문 HTTP입니다 — 자격 증명이 노출됩니다. HTTPS 엔드포인트를 쓰세요.");
-        }
-
         log.info("NCR Endpoint 도달성을 확인합니다.");
         ncrRegistryClient.healthCheck();
         log.info("NCR Endpoint 도달 확인 완료.");
@@ -46,8 +40,8 @@ public class StartupChecks implements ApplicationRunner {
         // 그 경우는 건너뛰고 실제 실행 시점의 실패에 맡긴다.
         if (ncrProperties.cliPath().contains("/") || ncrProperties.cliPath().contains("\\")) {
             if (!Files.isExecutable(Path.of(ncrProperties.cliPath()))) {
-                throw new IllegalStateException(
-                        "E-0605: skopeo 실행 파일을 찾을 수 없거나 실행 권한이 없습니다: " + ncrProperties.cliPath());
+                throw new IllegalStateException("%s: skopeo 실행 파일을 찾을 수 없거나 실행 권한이 없습니다: %s"
+                        .formatted(ErrorCode.SKOPEO_NOT_EXECUTABLE.getCode(), ncrProperties.cliPath()));
             }
         }
         log.info("skopeo 확인 완료.");

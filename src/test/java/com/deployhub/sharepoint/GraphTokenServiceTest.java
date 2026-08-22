@@ -33,7 +33,7 @@ class GraphTokenServiceTest {
 
     private static final String TOKEN_URL = "https://login.microsoftonline.com/tenant/oauth2/v2.0/token";
     private static final GraphProperties PROPERTIES =
-            new GraphProperties("tenant", "client", "secret", "site", null, "/Deploy/Packages");
+            new GraphProperties("tenant", "client", null, "/Deploy/Packages");
 
     @TempDir
     Path tempDir;
@@ -80,11 +80,28 @@ class GraphTokenServiceTest {
                         MediaType.APPLICATION_JSON));
 
         String first = service.getAccessToken();
-        service.invalidate();
+        service.invalidate(first);
         String second = service.getAccessToken();
 
         assertThat(first).isEqualTo("tok-1");
         assertThat(second).isEqualTo("tok-2");
+        server.verify();
+    }
+
+    @Test
+    void 이미_교체된_토큰으로_invalidate하면_캐시를_지우지_않는다() {
+        // 401을 본 스레드가 무조건 비우면 다른 스레드가 방금 받은 정상 토큰까지 버려
+        // 불필요한 refresh token 회전이 늘어난다. 발급 요청이 한 번뿐이어야 한다.
+        server.expect(requestTo(TOKEN_URL))
+                .andRespond(withSuccess(
+                        "{\"access_token\":\"tok-1\",\"refresh_token\":\"rt-1\",\"expires_in\":3600}",
+                        MediaType.APPLICATION_JSON));
+
+        String first = service.getAccessToken();
+        service.invalidate("someone-elses-stale-token");
+        String second = service.getAccessToken();
+
+        assertThat(second).isEqualTo(first);
         server.verify();
     }
 

@@ -1,5 +1,6 @@
 package com.deployhub.sharepoint;
 
+import com.deployhub.common.ErrorCode;
 import com.deployhub.common.ApiException;
 import com.deployhub.job.service.PackageJobService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -26,7 +27,6 @@ import org.springframework.web.client.RestClientResponseException;
 public class GraphFolderService {
 
     private static final Pattern FORBIDDEN_CHARS = Pattern.compile("[\"*:<>?/\\\\|]");
-    private static final int MAX_NAME_LENGTH = 255;
     private static final String LINK_TYPE = "view";
     private static final String LINK_SCOPE = "organization";
 
@@ -50,7 +50,7 @@ public class GraphFolderService {
 
         clearExistingChildren(driveId, folder.id());
         String linkUrl = createShareLink(driveId, folder.id()).orElseGet(() -> {
-            log.warn("E-1005: 조직 범위 공유 링크 발급이 차단되어 폴더 webUrl로 대체합니다: versionName={}", versionName);
+            log.warn("{} versionName={}", ErrorCode.SHARE_LINK_BLOCKED.toMessage(), versionName);
             return folder.webUrl();
         });
 
@@ -60,17 +60,18 @@ public class GraphFolderService {
         return folder.id();
     }
 
+    /**
+     * 상위 계층(version_name 정규식 + VARCHAR(20) PK)이 이미 막지만, 이 값이 Graph 경로 addressing
+     * URL에 그대로 붙으므로 경로를 벗어나게 만드는 두 가지만 한 겹 더 본다. 길이·공백 검사는
+     * 컬럼 폭과 문자집합(숫자·'.'·'-')에서 도달할 수 없어 뺐다.
+     */
     private void validateFolderName(String name) {
-        if (name.isBlank() || name.length() > MAX_NAME_LENGTH || !name.strip().equals(name)) {
-            throw new IllegalStateException("E-1004: 폴더명 규칙을 위반했습니다: " + name);
-        }
-        // 전부 '.'인 이름(".", "..")은 SharePoint 경로 addressing에서 상위 경로를 가리킬 수 있다 —
-        // 상위 계층 정규식이 이미 막지만 그 검증이 느슨해지는 미래를 대비한 방어층이다.
+        // 전부 '.'인 이름(".", "..")은 상위 경로를 가리킬 수 있다.
         if (name.chars().allMatch(c -> c == '.')) {
-            throw new IllegalStateException("E-1004: 폴더명에 허용되지 않는 문자가 있습니다: " + name);
+            throw new IllegalStateException(ErrorCode.INVALID_FOLDER_NAME.toLogMessage(name));
         }
         if (FORBIDDEN_CHARS.matcher(name).find()) {
-            throw new IllegalStateException("E-1004: 폴더명에 허용되지 않는 문자가 있습니다: " + name);
+            throw new IllegalStateException(ErrorCode.INVALID_FOLDER_NAME.toLogMessage(name));
         }
     }
 
@@ -91,7 +92,7 @@ public class GraphFolderService {
                         .getOrNull(folderPath(driveId, versionName))
                         .map(this::parseFolderItem)
                         .orElseThrow(() ->
-                                new IllegalStateException("E-1001: 폴더 생성 경합 후 재조회에 실패했습니다: " + versionName));
+                                new IllegalStateException(ErrorCode.FOLDER_LOOKUP_FAILED.toLogMessage(versionName)));
             }
             throw ex;
         }
@@ -101,7 +102,7 @@ public class GraphFolderService {
         return graphApiClient
                 .getOrNull("/drives/%s/root:%s".formatted(driveId, graphProperties.rootPath()))
                 .map(this::parseFolderItem)
-                .orElseThrow(() -> new IllegalStateException("E-1002: SharePoint 상위 경로가 없습니다: " + graphProperties.rootPath()))
+                .orElseThrow(() -> new IllegalStateException(ErrorCode.ROOT_PATH_MISSING.toLogMessage(graphProperties.rootPath())))
                 .id();
     }
 
@@ -109,7 +110,12 @@ public class GraphFolderService {
         return "/drives/%s/root:%s/%s".formatted(driveId, graphProperties.rootPath(), versionName);
     }
 
-    /** ponytail: nextLink를 따라가지 않는 대신 {@code $top=999}로 기본 페이지 크기보다 넉넉히 받는다. */
+    /**
+     * 이전 확정본을 남기지 않는다 — 파일명 충돌 검사가 "이번 확정본" 안에서만 도는 근거다
+     * ({@code PackageJobService.assertTargetTagsValid}). 여기를 증분 업로드로 바꾸면 그 검사도 넓혀야 한다.
+     *
+     * <p>ponytail: nextLink를 따라가지 않는 대신 {@code $top=999}로 기본 페이지 크기보다 넉넉히 받는다.
+     */
     private void clearExistingChildren(String driveId, String folderItemId) {
         String response = graphApiClient.get("/drives/%s/items/%s/children?$top=999".formatted(driveId, folderItemId));
         for (String childId : parseChildIds(response)) {
@@ -140,7 +146,7 @@ public class GraphFolderService {
             String response = graphApiClient.post("/drives/%s/items/%s/createLink".formatted(driveId, folderItemId), body);
             return Optional.of(extractLinkWebUrl(response));
         } catch (RuntimeException ex) {
-            log.warn("E-1005: 공유 링크 발급이 거부됐습니다: folderItemId={}, reason={}", folderItemId, describeBriefly(ex));
+            log.warn("{} folderItemId={}, reason={}", ErrorCode.SHARE_LINK_REJECTED.toMessage(), folderItemId, describeBriefly(ex));
             return Optional.empty();
         }
     }

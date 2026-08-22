@@ -37,9 +37,6 @@ public class PackageJob {
     @Column(name = "sp_folder_url", length = 500)
     private String spFolderUrl;
 
-    @Column(name = "created_by", length = 100, nullable = false)
-    private String createdBy;
-
     @Builder.Default
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
@@ -74,9 +71,8 @@ public class PackageJob {
      * {@code createdAt}은 건드리지 말 것 — {@code updatable = false}라 대입해도 UPDATE에서 조용히 빠져
      * 응답 DTO와 실제 저장값이 어긋난다.
      */
-    public void resetForRerun(String createdBy) {
+    public void resetForRerun() {
         this.status = JobStatus.PENDING;
-        this.createdBy = createdBy;
         this.finishedAt = null;
         this.deletedAt = null;
     }

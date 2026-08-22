@@ -29,7 +29,6 @@ class PackageJobTest {
     void 종료_상태로_전이하면_finishedAt을_찍는다() {
         PackageJob job = PackageJob.builder()
                 .versionName("2027.01.01")
-                .createdBy("tester")
                 .status(JobStatus.UPLOADING)
                 .build();
 
@@ -44,19 +43,17 @@ class PackageJobTest {
     void resetForRerun은_finishedAt과_deletedAt을_함께_비운다() {
         PackageJob job = cleanedFailedJob();
 
-        job.resetForRerun("operator");
+        job.resetForRerun();
 
         assertThat(job.getStatus()).isEqualTo(JobStatus.PENDING);
         assertThat(job.getFinishedAt()).isNull();
         assertThat(job.getDeletedAt()).isNull();
-        assertThat(job.getCreatedBy()).isEqualTo("operator");
     }
 
     /** 보존 기한이 지나 정리 배치가 폴더를 지운 뒤의 FAILED Job. */
     private PackageJob cleanedFailedJob() {
         PackageJob job = PackageJob.builder()
                 .versionName("2027.01.01")
-                .createdBy("tester")
                 .status(JobStatus.FAILED)
                 .build();
         job.changeStatus(JobStatus.FAILED);

@@ -6,11 +6,14 @@ import com.deployhub.job.dto.PackageCleanupResponse;
 import com.deployhub.job.entity.JobStatus;
 import com.deployhub.job.entity.PackageJob;
 import com.deployhub.job.repository.PackageJobRepository;
+import com.deployhub.job.service.PackagePurgeService.LocalDir;
 import com.deployhub.job.service.PackagePurgeService.PurgeResult;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.EnumSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
@@ -40,6 +43,10 @@ public class PackageCleanupService {
      * 부분 업로드분이 DONE만 훑으면 영구히 남는다.
      */
     private static final Set<JobStatus> CLEANABLE = EnumSet.of(JobStatus.DONE, JobStatus.FAILED);
+
+    /** 진행 중(E-1404)도 그 사이 재실행됨(E-1405)도 "이번엔 건너뛴다"이지 실패가 아니다. */
+    private static final Set<ErrorCode> SKIPPABLE =
+            EnumSet.of(ErrorCode.PACKAGE_CLEANUP_BLOCKED, ErrorCode.PACKAGE_CLEANUP_RERUN);
 
     private final PackageJobRepository packageJobRepository;
     private final PackagePurgeService packagePurgeService;
@@ -98,7 +105,7 @@ public class PackageCleanupService {
 
         List<String> localCleaned = new ArrayList<>();
         List<String> sharePointCleaned = new ArrayList<>();
-        List<String> failed = new ArrayList<>();
+        Set<String> failed = new LinkedHashSet<>();
 
         // 1단계 — DONE만 대상이다. FAILED의 디렉터리는 재시도 여지를 남기고 2단계가 기한 뒤에 함께 지운다.
         for (PackageJob job : candidates) {
@@ -106,15 +113,20 @@ public class PackageCleanupService {
                 continue;
             }
             if (dryRun) {
-                localCleaned.add(job.getVersionName());
+                // 실제 실행과 같은 기준으로만 담는다 — 이미 없는 디렉터리를 "지울 예정"으로 세면
+                // 매일 같은 목록이 나와 운영자가 상태를 오판한다.
+                if (Boolean.TRUE.equals(
+                        runQuietly(job, failed, () -> packagePurgeService.hasLocalDir(job.getVersionName())))) {
+                    localCleaned.add(job.getVersionName());
+                }
                 continue;
             }
-            Boolean deleted = runQuietly(
+            LocalDir localDir = runQuietly(
                     job, failed, () -> packagePurgeService.purgeLocal(job.getVersionName(), trigger, job.getFinishedAt()));
-            if (Boolean.TRUE.equals(deleted)) {
+            if (localDir == LocalDir.DELETED) {
                 localCleaned.add(job.getVersionName());
-            } else if (deleted != null) {
-                failed.add(job.getVersionName()); // false는 삭제 실패만 뜻한다 — 재실행 감지는 예외로 온다
+            } else if (localDir == LocalDir.FAILED) {
+                failed.add(job.getVersionName()); // 재실행 감지는 예외로 오고, ABSENT는 지울 게 없던 것뿐이다
             }
         }
 
@@ -133,7 +145,16 @@ public class PackageCleanupService {
                 continue;
             }
             if (dryRun) {
-                sharePointCleaned.add(job.getVersionName());
+                // 2단계는 폴더와 로컬 디렉터리를 함께 지운다 — 폴더 id가 없어도 디렉터리는 지워지므로
+                // 그쪽을 빼면 이번엔 반대로 "지울 건데 보고 안 함"이 된다.
+                if (job.getSpFolderId() != null && !job.getSpFolderId().isBlank()) {
+                    sharePointCleaned.add(job.getVersionName());
+                }
+                if (!localCleaned.contains(job.getVersionName())
+                        && Boolean.TRUE.equals(
+                                runQuietly(job, failed, () -> packagePurgeService.hasLocalDir(job.getVersionName())))) {
+                    localCleaned.add(job.getVersionName());
+                }
                 continue;
             }
             PurgeResult result = runQuietly(
@@ -145,9 +166,9 @@ public class PackageCleanupService {
             if (result.folderDeleted()) {
                 sharePointCleaned.add(job.getVersionName());
             }
-            if (!result.localDeleted()) {
+            if (result.localDir() == LocalDir.FAILED) {
                 failed.add(job.getVersionName()); // 다음 배치에서 재시도한다
-            } else if (!localCleaned.contains(job.getVersionName())) {
+            } else if (result.localDir() == LocalDir.DELETED && !localCleaned.contains(job.getVersionName())) {
                 localCleaned.add(job.getVersionName());
             }
         }
@@ -163,7 +184,7 @@ public class PackageCleanupService {
                 .dryRun(dryRun)
                 .localCleaned(localCleaned)
                 .sharePointCleaned(sharePointCleaned)
-                .failed(failed)
+                .failed(List.copyOf(failed))
                 .build();
     }
 
@@ -177,9 +198,9 @@ public class PackageCleanupService {
         // 실제로 지운 것만 보고한다 — 과장하면 운영자가 상태를 오판한다.
         return PackageCleanupResponse.builder()
                 .dryRun(false)
-                .localCleaned(result.localDeleted() ? List.of(versionName) : List.of())
+                .localCleaned(result.localDir() == LocalDir.DELETED ? List.of(versionName) : List.of())
                 .sharePointCleaned(result.folderDeleted() ? List.of(versionName) : List.of())
-                .failed(result.localDeleted() ? List.of() : List.of(versionName))
+                .failed(result.localDir() == LocalDir.FAILED ? List.of(versionName) : List.of())
                 .build();
     }
 
@@ -189,11 +210,11 @@ public class PackageCleanupService {
      *
      * @return 예외로 건너뛰었으면 null. 그 외에는 {@code action}의 반환값 그대로다.
      */
-    private <T> T runQuietly(PackageJob job, List<String> failed, Supplier<T> action) {
+    private <T> T runQuietly(PackageJob job, Collection<String> failed, Supplier<T> action) {
         try {
             return action.get();
         } catch (ApiException e) {
-            if (e.getErrorCode() == ErrorCode.PACKAGE_CLEANUP_BLOCKED) {
+            if (SKIPPABLE.contains(e.getErrorCode())) {
                 return null; // 사유는 PackagePurgeService가 이미 로그로 남겼다.
             }
             log.warn(
@@ -204,7 +225,7 @@ public class PackageCleanupService {
             return null;
         } catch (RuntimeException e) {
             // 권한 문제(403) 등 — 해당 건만 건너뛰고 배치를 계속한다.
-            log.warn("E-1402: 패키지 정리를 건너뜁니다: versionName={}, reason={}", job.getVersionName(), e.toString());
+            log.warn("{} versionName={}, reason={}", ErrorCode.CLEANUP_SKIPPED.toMessage(), job.getVersionName(), e.toString());
             failed.add(job.getVersionName());
             return null;
         }

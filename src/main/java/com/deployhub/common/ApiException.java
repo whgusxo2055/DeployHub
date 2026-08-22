@@ -23,7 +23,11 @@ public class ApiException extends RuntimeException {
     }
 
     public ApiException(ErrorCode errorCode, List<String> details) {
-        super(errorCode.getDefaultMessage());
+        super(errorCode.getMessage());
+        // 로그 전용 코드의 문구에는 경로·호스트가 들어갈 수 있다 — HTTP 응답으로 나가면 안 된다.
+        if (errorCode.getExposure() != ErrorCode.Exposure.PUBLIC) {
+            throw new IllegalArgumentException("로그 전용 코드는 HTTP 응답이 될 수 없습니다: " + errorCode);
+        }
         this.errorCode = errorCode;
         this.details = details;
     }

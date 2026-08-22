@@ -31,8 +31,9 @@ public class AsyncConfig {
     }
 
     /**
-     * 매니페스트 조회 전용. {@code @Async}가 아니라 서비스가 직접 제출한다 — 풀 크기와
-     * 배치 크기가 같아야 해서 {@code PackageValidationService}가 같은 프로퍼티를 읽는다.
+     * 매니페스트 조회 전용. {@code @Async}가 아니라 {@code ImageTagChecker}가 직접 제출한다 —
+     * 풀 크기와 배치 크기가 같아야 해서 같은 프로퍼티를 읽지만 <b>기본값 리터럴은 양쪽에 하나씩</b>이다.
+     * 한쪽만 고치면 조용히 갈라지므로 함께 고칠 것.
      */
     @Bean("manifestExecutor")
     public ThreadPoolTaskExecutor manifestExecutor(@Value("${deployhub.manifest.concurrency:5}") int concurrency) {

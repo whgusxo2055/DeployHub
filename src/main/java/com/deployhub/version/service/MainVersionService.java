@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -34,6 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 /** 메인버전 목록·상세 조회와 등록·수정. */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -52,20 +54,59 @@ public class MainVersionService {
             throw new ApiException(
                     ErrorCode.MAIN_VERSION_ALREADY_EXISTS, List.of("versionName=" + request.versionName()));
         }
+        MainVersion saved;
         try {
-            MainVersion saved = mainVersionRepository.saveAndFlush(MainVersion.builder()
+            saved = mainVersionRepository.saveAndFlush(MainVersion.builder()
                     .versionName(request.versionName())
                     .sortKey(MainVersion.sortKeyOf(request.versionName()))
                     .releaseNote(request.releaseNote())
                     .sqlScript(request.sqlScript())
                     .build());
-            return MainVersionInfoResponse.from(saved);
         } catch (DataIntegrityViolationException e) {
             // uk_main_version_sort_key. 등록 정규식이 정규형만 받으므로 정상 경로에서는 안 걸리고,
             // 그 정규식이 느슨하던 시절에 들어온 옛 행('2026.08.05.1' 등)과 겹칠 때만 남는다.
             throw new ApiException(
                     ErrorCode.MAIN_VERSION_ALREADY_EXISTS, List.of("versionName=" + request.versionName()));
         }
+        copySubVersionsFromPrevious(saved.getVersionName());
+        return MainVersionInfoResponse.from(saved);
+    }
+
+    /**
+     * 직전 담당 영역을 전건 PENDING으로 복사한다 — 안 하면 등록자가 빠뜨린 모듈이 아무 데도 안 걸린다.
+     * note는 제외(직전 배포의 변경 사항이 릴리즈 노트에 실린다). 레지스트리 재확인·락 없음.
+     */
+    private void copySubVersionsFromPrevious(String versionName) {
+        String previous = versionComparisonService
+                .findPreviousMainVersion(versionName)
+                .map(MainVersion::getVersionName)
+                .orElse(null);
+        if (previous == null) {
+            return; // 최초 메인버전 — 등록자가 직접 채운다.
+        }
+
+        List<SubVersion> sources = subVersionRepository.findByMainVersionNameOrderBySortOrderAsc(previous);
+        Map<Long, List<Component>> componentsBySourceId = componentRepository
+                .findBySubVersionIdInOrderBySortOrderAsc(sources.stream().map(SubVersion::getId).toList())
+                .stream()
+                .collect(Collectors.groupingBy(Component::getSubVersionId));
+
+        for (SubVersion source : sources) {
+            SubVersion copy = subVersionRepository.save(SubVersion.builder()
+                    .mainVersionName(versionName)
+                    .code(source.getCode())
+                    .version(source.getVersion())
+                    .sortOrder(source.getSortOrder())
+                    .build());
+            for (Component component : componentsBySourceId.getOrDefault(source.getId(), List.of())) {
+                componentRepository.save(Component.builder()
+                        .subVersionId(copy.getId())
+                        .imageTag(component.getImageTag())
+                        .sortOrder(component.getSortOrder())
+                        .build());
+            }
+        }
+        log.info("직전 담당 영역 복사: versionName={}, previous={}, subVersions={}", versionName, previous, sources.size());
     }
 
     @Transactional
@@ -94,7 +135,7 @@ public class MainVersionService {
         List<SubVersion> subVersions = subVersionRepository.findByMainVersionNameOrderBySortOrderAsc(versionName);
         List<Long> subVersionIds = subVersions.stream().map(SubVersion::getId).toList();
         Map<Long, List<Component>> componentsBySubVersionId = componentRepository
-                .findBySubVersionIdIn(subVersionIds)
+                .findBySubVersionIdInOrderBySortOrderAsc(subVersionIds)
                 .stream()
                 .collect(Collectors.groupingBy(Component::getSubVersionId));
 
@@ -108,17 +149,12 @@ public class MainVersionService {
                 .toList();
 
         int componentCount = componentsBySubVersionId.values().stream().mapToInt(List::size).sum();
-        int missingCount = (int) subVersions.stream()
-                .filter(subVersion -> componentsBySubVersionId.getOrDefault(subVersion.getId(), List.of()).isEmpty())
-                .count();
-
         return MainVersionDetailResponse.builder()
                 .mainVersion(MainVersionInfoResponse.from(mainVersion))
                 .subVersions(subVersionResponses)
                 .summary(DetailSummaryResponse.builder()
                         .subVersionCount(subVersions.size())
                         .componentCount(componentCount)
-                        .missingCount(missingCount)
                         .build())
                 .build();
     }

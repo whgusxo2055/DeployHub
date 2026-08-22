@@ -1,5 +1,6 @@
 package com.deployhub.job.entity;
 
+import com.deployhub.common.ErrorCode;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -52,9 +53,17 @@ public class PackageItem {
     private String fileUrl;
 
     /** 실패 처리 — 자동 재시도 여부는 호출자가 판단한다. */
-    public void markFailed(String errorMessage) {
+    /**
+     * 문구를 문자열로 받지 않는다 — 이 값은 무인증 {@code GET /api/package-jobs/{versionName}}
+     * 응답에 그대로 실리므로, 호출부가 경로·업스트림 본문을 붙일 수 있으면 안 된다.
+     * 컨텍스트는 {@code PackageItemFailure.fail}의 {@code detail}로 넘겨 로그에만 남긴다.
+     */
+    public void markFailed(ErrorCode errorCode) {
+        if (errorCode.getExposure() != ErrorCode.Exposure.PUBLIC) {
+            throw new IllegalArgumentException("로그 전용 코드는 항목 실패 사유가 될 수 없습니다: " + errorCode);
+        }
         this.status = PackageItemStatus.FAILED;
-        this.errorMessage = errorMessage;
+        this.errorMessage = errorCode.toMessage();
     }
 
     /** 다운로드 성공 — {@code fileSize}는 실제 산출 tar 크기다(매니페스트 예상치가 아님). */

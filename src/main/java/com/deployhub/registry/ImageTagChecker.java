@@ -3,7 +3,6 @@ package com.deployhub.registry;
 import com.deployhub.common.ApiException;
 import com.deployhub.common.BoundedParallelism;
 import com.deployhub.common.ErrorCode;
-import com.deployhub.common.ItemErrorCode;
 import com.deployhub.registry.NcrRegistryClient.ManifestInfo;
 import java.util.List;
 import java.util.Optional;
@@ -50,13 +49,13 @@ public class ImageTagChecker {
         } catch (IllegalArgumentException e) {
             // 예외 메시지에는 태그 원문이 들어 있다 — 코드가 정한 문구만 남기고 원문은 로그로.
             log.warn("image_tag 형식 오류: reason={}", e.getMessage());
-            return new TagCheck(imageTag, null, ItemErrorCode.INVALID_IMAGE_TAG, false);
+            return new TagCheck(imageTag, null, ErrorCode.INVALID_IMAGE_TAG, false);
         }
 
         try {
             Optional<ManifestInfo> manifest = ncrRegistryClient.getManifest(ref);
             return manifest.map(info -> new TagCheck(imageTag, info, null, false))
-                    .orElseGet(() -> new TagCheck(imageTag, null, ItemErrorCode.IMAGE_NOT_FOUND, true));
+                    .orElseGet(() -> new TagCheck(imageTag, null, ErrorCode.IMAGE_NOT_FOUND, true));
         } catch (ApiException e) {
             // 사내망 차단은 토큰 응답에 평문이 끼어 REGISTRY_UNREACHABLE로 분류된다 —
             // 이걸 그대로 던지면 "차단은 등록을 막지 않는다"는 약속이 정작 차단 상황에서 깨지고,
@@ -69,8 +68,8 @@ public class ImageTagChecker {
                     imageTag,
                     null,
                     e.getErrorCode() == ErrorCode.REGISTRY_TIMEOUT
-                            ? ItemErrorCode.MANIFEST_LOOKUP_TIMEOUT
-                            : ItemErrorCode.MANIFEST_LOOKUP_UNAVAILABLE,
+                            ? ErrorCode.MANIFEST_LOOKUP_TIMEOUT
+                            : ErrorCode.MANIFEST_LOOKUP_UNAVAILABLE,
                     false);
         }
     }
@@ -79,10 +78,10 @@ public class ImageTagChecker {
      * {@code definitelyMissing}은 레지스트리가 404로 "없다"고 답한 경우만 참이다 — 타임아웃·형식
      * 오류와 구분해야 등록 차단이 네트워크 장애로 번지지 않는다.
      *
-     * <p>{@code failureCode}의 문구가 무인증 응답에 그대로 실린다({@link ItemErrorCode} 참고).
+     * <p>{@code failureCode}의 문구가 무인증 응답에 그대로 실린다({@link ErrorCode} 참고).
      */
     public record TagCheck(
-            String imageTag, ManifestInfo manifestInfo, ItemErrorCode failureCode, boolean definitelyMissing) {
+            String imageTag, ManifestInfo manifestInfo, ErrorCode failureCode, boolean definitelyMissing) {
 
         public boolean found() {
             return manifestInfo != null;

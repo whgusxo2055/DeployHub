@@ -4,8 +4,10 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
@@ -44,7 +46,7 @@ public class GlobalExceptionHandler {
                 : logUnmappedValidationTargetAndFallBack(ex);
 
         return ResponseEntity.status(errorCode.getHttpStatus())
-                .body(ApiErrorResponse.of(errorCode, errorCode.getDefaultMessage(), details));
+                .body(ApiErrorResponse.of(errorCode, errorCode.getMessage(), details));
     }
 
     // enum 쿼리 파라미터가 유효하지 않으면 여기로 온다 — 없으면 클라이언트 실수가 500이 된다.
@@ -53,7 +55,7 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(ErrorCode.INVALID_QUERY_PARAMETER.getHttpStatus())
                 .body(ApiErrorResponse.of(
                         ErrorCode.INVALID_QUERY_PARAMETER,
-                        ErrorCode.INVALID_QUERY_PARAMETER.getDefaultMessage(),
+                        ErrorCode.INVALID_QUERY_PARAMETER.getMessage(),
                         List.of("%s: '%.100s'".formatted(ex.getName(), String.valueOf(ex.getValue())))));
     }
 
@@ -62,13 +64,13 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(NoResourceFoundException.class)
     public ResponseEntity<ApiErrorResponse> handleNoResource(NoResourceFoundException ex, HttpServletRequest request) {
-        // getResourcePath()가 아니라 원본 URI를 찍는다 — 전자는 선행·중복·후행 슬래시를 정규화해 버려서
-        // `//api/x`·`/api/x/`처럼 클라이언트가 잘못 부른 경로가 매핑된 경로와 똑같이 보인다.
-        log.warn("매핑되지 않은 경로 요청: {} {}", ex.getHttpMethod(), request.getRequestURI());
+        // 운영자가 할 일이 없는 클라이언트 오류라 DEBUG다 — 공인 IP에 붙어 있어 favicon.ico와
+        // 봇 스캔이 WARN을 채운다. 원본 URI를 찍는 이유는 getResourcePath()가 슬래시를 정규화해서다.
+        log.debug("매핑되지 않은 경로 요청: {} {}", ex.getHttpMethod(), request.getRequestURI());
         return ResponseEntity.status(ErrorCode.ENDPOINT_NOT_FOUND.getHttpStatus())
                 .body(ApiErrorResponse.of(
                         ErrorCode.ENDPOINT_NOT_FOUND,
-                        ErrorCode.ENDPOINT_NOT_FOUND.getDefaultMessage(),
+                        ErrorCode.ENDPOINT_NOT_FOUND.getMessage(),
                         List.of()));
     }
 
@@ -90,7 +92,7 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(ErrorCode.MALFORMED_REQUEST.getHttpStatus())
                 .body(ApiErrorResponse.of(
                         ErrorCode.MALFORMED_REQUEST,
-                        ErrorCode.MALFORMED_REQUEST.getDefaultMessage(),
+                        ErrorCode.MALFORMED_REQUEST.getMessage(),
                         List.of("%s: 필수 파라미터가 없습니다.".formatted(ex.getParameterName()))));
     }
 
@@ -102,7 +104,7 @@ public class GlobalExceptionHandler {
             builder.header(HttpHeaders.ALLOW, StringUtils.collectionToDelimitedString(ex.getSupportedHttpMethods(), ", "));
         }
         return builder.body(ApiErrorResponse.of(
-                ErrorCode.METHOD_NOT_ALLOWED, ErrorCode.METHOD_NOT_ALLOWED.getDefaultMessage(), List.of()));
+                ErrorCode.METHOD_NOT_ALLOWED, ErrorCode.METHOD_NOT_ALLOWED.getMessage(), List.of()));
     }
 
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
@@ -110,16 +112,27 @@ public class GlobalExceptionHandler {
         return errorResponse(ErrorCode.UNSUPPORTED_MEDIA_TYPE);
     }
 
+    /**
+     * 클라이언트가 JSON을 안 받겠다고 한 것이라 공통 오류 스키마를 실을 수 없다 — 본문 없이 406만 준다.
+     * 이게 없으면 {@code handleUnexpected}가 잡아 무인증 API에 Accept 헤더 하나로 ERROR + 스택트레이스가 쌓인다.
+     */
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<Void> handleNotAcceptable(
+            HttpMediaTypeNotAcceptableException ex, HttpServletRequest request) {
+        log.debug("허용 가능한 표현이 없습니다: path={}, supported={}", request.getRequestURI(), ex.getSupportedMediaTypes());
+        return ResponseEntity.status(HttpStatus.NOT_ACCEPTABLE).build();
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiErrorResponse> handleUnexpected(Exception ex) {
         log.error("예기치 못한 오류가 발생했습니다.", ex);
         return ResponseEntity.status(ErrorCode.INTERNAL_ERROR.getHttpStatus())
-                .body(ApiErrorResponse.of(ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.getDefaultMessage(), List.of()));
+                .body(ApiErrorResponse.of(ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.getMessage(), List.of()));
     }
 
     private static ResponseEntity<ApiErrorResponse> errorResponse(ErrorCode errorCode) {
         return ResponseEntity.status(errorCode.getHttpStatus())
-                .body(ApiErrorResponse.of(errorCode, errorCode.getDefaultMessage(), List.of()));
+                .body(ApiErrorResponse.of(errorCode, errorCode.getMessage(), List.of()));
     }
 
     private ErrorCode logUnmappedValidationTargetAndFallBack(MethodArgumentNotValidException ex) {

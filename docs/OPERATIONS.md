@@ -14,14 +14,13 @@
 |---|---|---|
 | `WORK_DIR` | `/data/deployhub/jobs` | 아카이브가 쌓이는 곳. 디스크 여유의 기준이다 |
 | `NCR_ENDPOINT`·`NCR_ACCESS_KEY`·`NCR_SECRET_KEY` | — | 비어 있으면 **기동 실패**(`@NotBlank`) |
-| `GRAPH_TENANT_ID`·`GRAPH_CLIENT_ID`·`GRAPH_CLIENT_SECRET`·`SP_SITE_ID` | — | 동일 |
+| `GRAPH_TENANT_ID`·`GRAPH_CLIENT_ID` | — | 동일 |
 | `NCR_CLI_PATH` | `/usr/bin/skopeo` | 실행 불가면 기동 실패(E-0605) |
 | `STARTUP_CHECKS_ENABLED` | `true` | 끄면 NCR 도달성·skopeo·tar 점검을 건너뛴다. 운영에서 끄지 말 것 |
 | `SWAGGER_ENABLED` | `true` | 운영에서는 끄거나 nginx로 내부 IP만 허용 |
 | `CORS_ALLOWED_ORIGINS` | — | 프론트엔드 **브라우저 주소창**의 오리진이다(이 백엔드 IP가 아니다). 스킴 필수, 포트 와일드카드는 `:[*]` |
 | `UPLOAD_CHUNK_SIZE` | `10485760` | 320 KiB의 양의 배수 + 60 MiB 이하만 허용. 아니면 기동 실패(E-1108) |
 | `JOB_CONCURRENCY` | `3` | 동시 Job 수. skopeo 프로세스는 최대 `JOB_CONCURRENCY × DOWNLOAD_CONCURRENCY`개까지 뜬다 |
-| `MIN_FREE_DISK_BYTES` | `53687091200` (50GB) | 확정 시점 여유 공간 경고 기준 |
 | `RETENTION_DAYS` | `90` | SharePoint 폴더 보존 기간. **1 미만이면 기동 실패** |
 | `RETENTION_COUNT` | `10` | 기한이 지나도 보호할 최근 건수. 음수면 기동 실패 |
 | `LOCAL_CLEANUP_DELAY_HOURS` | `24` | 업로드 완료 후 작업 디렉터리 삭제 유예 |
@@ -82,7 +81,7 @@ curl -X DELETE 'localhost:8080/api/package-jobs/2026.08.05/package'
 
 | 코드 | 원인 | 대응 |
 |---|---|---|
-| (기동 실패) | `NCR_*`/`GRAPH_*`/`SP_SITE_ID` 누락 | `@NotBlank` 검증이다. `.env` 확인 |
+| (기동 실패) | `NCR_*`/`GRAPH_TENANT_ID`/`GRAPH_CLIENT_ID` 누락 | `@NotBlank` 검증이다. `.env` 확인 |
 | E-0605 | skopeo 실행 불가 | `NCR_CLI_PATH` 확인. 컨테이너 이미지에는 포함돼 있다 |
 | E-0404 | NCR에 연결 불가 | 아래 "NCR 도달성" 참고 |
 | E-1108 | `UPLOAD_CHUNK_SIZE`가 320 KiB 배수가 아님 | 값 수정 |
@@ -93,15 +92,25 @@ curl -X DELETE 'localhost:8080/api/package-jobs/2026.08.05/package'
 | 코드 | 의미 | 대응 |
 |---|---|---|
 | E-0204 | 진행 중이거나 완료된 메인버전의 매니페스트 수정 시도 | 정상 차단. `FAILED`만 수정 가능 |
+| E-0206 | 서브버전 등록 시점에 레지스트리에 없는 `image_tag` | 404(확실히 없음)에만 막는다. 사내망 차단 중에는 통과하므로 E-0308에서 다시 걸린다 |
 | E-0302 | 이미 Job이 있음 | 재생성하려면 `force=true` |
-| E-0304 | 작업 디렉터리 여유 공간 부족 | 정리 배치를 수동 실행하거나 `MIN_FREE_DISK_BYTES` 재검토 |
 | E-0305 | `PENDING` 담당 영역 잔존 | 해당 영역의 Release History 제출을 기다린다 |
+| E-0308 | Job 생성·재시도 시점에 레지스트리에 없는 `image_tag` | Job을 만들지 않고 400으로 거절한다. `details`에 실패한 태그 목록 |
 | E-0401 | 레지스트리 인증 실패 | 액세스키 확인. **단 사내망 차단도 이 증상으로 보일 수 있다** |
 | E-0402·E-0404 | 레지스트리 타임아웃·연결 불가 | 네트워크. 아래 참고 |
 | E-0452 | Graph 권한 부족 | `Sites.ReadWrite.All` 관리자 동의 여부 확인 |
 | E-0453 | Graph 일시 장애 | `RETRY_BACKOFF`에 따라 자동 재시도. 지속되면 서비스 상태 확인 |
-| E-0501 | 이미지 없음 | `image_tag` 오타가 가장 흔하다. 등록 시점 검증은 하지 않는 설계다 |
+| E-0501 | 이미지 없음 | `image_tag` 오타가 가장 흔하다. 등록(E-0206)·Job 생성(E-0308)에서 먼저 걸리므로, 여기까지 왔다면 그 사이 태그가 지워진 경우다 |
 | E-0603 | digest 불일치 | 다운로드 도중 태그가 갱신된 경우. 재시도 |
+| E-0602 | 작업 디렉터리 생성 실패 / 디스크 부족 | `WORK_DIR` 마운트·권한과 여유 공간 확인 |
+| E-1001 | 폴더 생성 경합 후 재조회 실패 | `SP_ROOT_PATH` 경로 확인(후행 슬래시 주의). 반복되면 Graph 상태 확인 |
+| E-1002 | SharePoint 상위 경로 없음 | `SP_ROOT_PATH`가 실제 존재하는지 확인 |
+| E-1004 | 폴더명 규칙 위반 | `version_name`에 금지문자나 `..`가 들어간 경우. 등록 정규식 확인 |
+| E-1102 | 업로드 세션 소멸 / 파일 읽기 실패 / 미완료 | 재시도. 반복되면 로컬 tar와 Graph 세션 유효기간 확인 |
+| E-1103 | 업로드 범위가 반복해서 어긋남 | 세션 상태 조회가 오프셋을 못 준 경우. 재시도하면 새 세션으로 다시 올린다 |
+| E-1402 | 정리 배치가 건별로 건너뜀 | 로그의 사유 코드 확인. 진행 중(E-1404)·재실행(E-1405)은 정상 |
+| E-1403 | 작업 디렉터리 삭제 실패 | 파일 점유·권한. 다음 배치가 재시도한다 |
+| E-1501 | 기동 시 고아 Job을 FAILED로 정리 | 강제 종료 흔적. 해당 Job은 `/retry`로 복구 |
 | E-0702 | 완료/진행 중 Job 재시도 시도 | 정상 차단 |
 | E-0703 | 작업 디렉터리 소실 | `force=true`로 전체 재수집 |
 | E-1201 | 아직 완료 전 | 응답 `details`에 현재 상태·진행률이 들어 있다 |
