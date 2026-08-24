@@ -244,3 +244,53 @@ E-0206으로 중단되고 `details`에 없는 태그 목록이 실린다 → 부
 삭제가 도는 사이 `force` 재실행이 끼어들면 방금 만들어진 폴더를 지울 수 있다. 사후 감지는
 `finished_at` 비교로 되지만 삭제 자체는 이미 일어난 뒤다. 한 번 구현했다가 이 맞바꿈 때문에
 되돌렸다.
+
+---
+
+## 12. Graph로 나가는 나머지 요청 본문도 키 순서가 보장되지 않는다
+
+**증상** — 재기동할 때마다 공유 링크가 생기기도, 조용히 폴더 URL로 격하되기도 한다. 한 프로세스
+안에서는 결과가 고정이라 "어제는 됐는데 오늘은 안 된다"로 보인다.
+
+**원인** — 2026-08-21에 `createUploadSession`이 `400 invalidRequest`로 죽은 원인이,
+OData 인스턴스 애노테이션(`@microsoft.graph.conflictBehavior`)이 `name` 뒤로 갔기 때문이었다.
+본문을 `Map.of`로 만들고 있었는데 `java.util.Map.of`는 `ImmutableCollections.SALT`가 JVM 기동마다
+정해져 순회 순서가 실행마다 무작위다(한 프로세스 안에서는 고정). 실측:
+
+| 본문 | 응답 |
+| --- | --- |
+| `{"item":{"@microsoft.graph.conflictBehavior":"replace","name":"x.tar"}}` | `200` |
+| `{"item":{"name":"x.tar","@microsoft.graph.conflictBehavior":"replace"}}` | `400 invalidRequest` |
+| `{"item":{"@odata.type":"microsoft.graph.driveItemUploadableProperties", …}}` | `400` (MS 문서 예시대로 넣으면 오히려 깨진다) |
+
+`createUploadSession`과 `createFolder`는 `GraphApiClient.orderedBody`로 고쳤다. 남은 건
+`GraphFolderService.createShareLink`의 `Map.of("type", …, "scope", …)`다. 여기엔 애노테이션이 없어
+위 규칙이 그대로 적용되지는 않지만, **하필 이 호출만 실패가 삼켜진다** — `createShareLink`가
+`RuntimeException`을 잡아 폴더 `webUrl`로 폴백하고 로그에는 `status=400`만 남는다.
+순서에 민감하더라도 영영 드러나지 않는 구조다.
+
+**지금 상태** — 서버 로그에 `SHARE_LINK_REJECTED`/`SHARE_LINK_BLOCKED` 기록은 없고, 폴더가 잡힌
+Job 2건 모두 실제 공유 링크(`:f:/g/` 형태)를 받았다. 다만 확인 범위가 현재 컨테이너 로그뿐이다.
+
+**그때 할 일** — 공유 링크가 간헐적으로 폴더 URL로 나오면 순서를 의심할 것. 확인은 토큰을 받아
+`createLink`에 키 순서만 바꾼 두 요청을 직접 보내면 1분이면 된다(회전한 refresh token을 파일에
+되돌려 쓰고 앱을 재기동해야 한다 — 앱은 메모리 값을 우선한다). 순서가 원인이면 `orderedBody`로
+한 줄 바꾸면 끝이다.
+
+---
+
+## 13. 업로드 세션 생성 실패의 재시도 예산이 65초로 짧다
+
+**증상** — Graph가 잠깐 흔들리면 항목 9건이 전부 FAILED로 확정되고 Job이 끝난다.
+
+**원인** — `GraphUploadService.uploadItemWithRetry`가 `MAX_RETRY=3` + 백오프 5/15/45초라
+**65초 안에 4번** 시도하고 포기한다. 2026-08-21에 실제로 9건 × 4회가 10분 만에 전부 소진됐다
+(그때 원인은 위 12번의 키 순서 버그였고 재시도로 살아날 성질이 아니었지만, 진짜 일시 장애였다면
+같은 식으로 무너진다).
+
+**안 고친 이유** — 실 Graph 장애를 재현하지 못했다. 예산을 늘리면 정말 못 고칠 요청(400 계열)에서
+Job이 오래 매달리는 맞바꿈이 생긴다.
+
+**그때 할 일** — 세션 생성 실패에 한해 백오프를 분 단위로 늘리되, `classifyFailure`가 400을
+재시도 대상에서 빼는 것을 함께 볼 것. 지금은 400도 재시도하므로 예산만 늘리면 잘못된 요청에
+5분씩 매달린다.
