@@ -13,7 +13,8 @@
 
 - `BUILD SUCCESSFUL`은 테스트가 돌았다는 뜻이 아니다 — skopeo/docker가 없으면 `Assumptions.assumeTrue`로 조용히 스킵된다. `build/test-results/test/*.xml`의 `tests`/`skipped` 속성으로 실제 실행 건수를 확인할 것. 스킵은 **Windows/IntelliJ 한정**이고 로컬 WSL은 둘 다 있어 전부 돈다 — 테스트 서버의 값어치는 스킵 해소가 아니라 실물 NCR 도달이다.
 - **Docker 데몬이 꺼져 있으면** `MySqlContainerSupport`의 static 초기화가 실패해 이를 상속한 통합 테스트 4개가 `initializationError` 하나씩으로 죽는다(`NoClassDefFoundError: Could not initialize class ...Support`). 코드 문제로 오인하기 쉽고, 이때 집계가 통합 테스트 4개 클래스만큼 줄어 보인다 — 기준치보다 눈에 띄게 낮으면 Docker부터 확인할 것.
-- `./gradlew test | tail -N`처럼 파이프로 넘기면 **파이프 마지막 명령의 종료 코드**가 잡혀 BUILD FAILED가 성공(exit 0)으로 보고된다. 백그라운드 실행이면 특히 눈치채기 어렵다 — 판정은 종료 코드가 아니라 항상 `build/test-results/test/*.xml` 집계로 할 것.
+- `./gradlew test | tail -N`처럼 파이프로 넘기면 **파이프 마지막 명령의 종료 코드**가 잡혀 BUILD FAILED가 성공(exit 0)으로 보고된다. 백그라운드 실행이면 특히 눈치채기 어렵다 — 판정은 종료 코드가 아니라 항상 `build/test-results/test/*.xml` 집계로 할 것. 게다가 `tail`이 출력을 전부 버퍼링해 **어디서 막혔는지도 안 보인다** — 오래 걸리는 실행은 파이프 없이 돌릴 것.
+- 그 집계도 **직전 실행 것일 수 있다** — 테스트가 안 돌면 옛 XML이 그대로 남는다. 로그에 `> Task :compileJava`가 (UP-TO-DATE 없이) 찍혔는지, `build/classes/.../X.class` mtime이 고친 `.java`보다 **뒤인지**를 먼저 볼 것.
 - 테스트의 `System.out` 출력은 gradle 콘솔에 안 나온다 — 실측용 scratch 테스트 결과는 `build/test-results/test/*.xml`의 `<system-out>`에서 꺼낼 것. `### ` 같은 표식을 붙여 `grep -oh '### [^<]*'`로 뽑으면 편하다.
 - 실행/실패 건수 집계 한 줄: `for k in tests failures errors skipped; do echo "$k: $(grep -oh "$k=\"[0-9]*\"" build/test-results/test/*.xml | grep -o '[0-9]*' | paste -sd+ | bc)"; done`
 - `gradlew test`가 `NoSuchFileException: build/test-results/.../in-progress-results-generic.bin`으로 죽으면 테스트 실패가 아니라 drvfs+V3 파일 잠금이다 — `rm -rf build/test-results build/reports/tests` 후 재실행하면 통과한다. 전체 스위트는 3~6분(25개 클래스/159건, 2026-08-18 기준). 부하에 따라 11분까지 늘어난 적 있다.
@@ -23,6 +24,7 @@
 - **원격 컴파일이 깨지면 `t.sh`가 서버에 남은 이전 `build/`를 그대로 회수해 집계가 초록으로 보인다** — BUILD FAILED인데 "실행 172건, 실패 0"이 찍힌다. 집계 전 로컬 `backend/build-remote`뿐 아니라 **서버의 `build/test-results`·`build/reports`도 지울 것**(`ssh devsrv 'rm -rf DeployHub/backend/build/test-results DeployHub/backend/build/reports'`).
 - 로컬 gradle이 `Could not create service of type FileHasher ... IOException: Input/output error`로 죽으면 drvfs에서 캐시가 깨진 것이다 — `./gradlew --stop && rm -rf .gradle` 후 재실행. 위 `in-progress-results-generic.bin`과는 다른 증상이다.
 - 서브에이전트를 병렬로 돌릴 때 각자 `gradlew test`를 실행하면 같은 `build/test-results`를 밟아 서로 죽인다 — 실측이 필요한 리뷰는 순차로 돌릴 것.
+- 백그라운드 명령 안에서 `pgrep -f`/`pkill -f`로 다른 실행을 찾지 말 것 — 그 패턴 문자열이 자기 bash의 cmdline에 통째로 들어 있어 **자신을 매칭**한다(`pgrep`은 영원히 안 끝나고, `pkill`은 자기 셸을 죽여 exit 143이 된다). 선행 종료는 harness 통보를 기다릴 것.
 
 # 환경 참고사항
 
@@ -54,11 +56,16 @@
 - 셸 작업 디렉터리가 도중에 `/mnt/c/Project`로 초기화되는 일이 있다 — gradlew는 항상 `cd /mnt/c/Project/backend &&`로 시작할 것.
 - `gh` CLI가 없다(WSL·Windows 양쪽). PR은 `https://github.com/whgusxo2055/DeployHub/compare/master...<브랜치>?expand=1`로 열거나 github MCP를 쓴다 — user scope + `Authorization: <PAT>` 헤더(`Bearer` 접두사 불필요), 세션을 재시작해야 도구가 붙는다.
 - **서버 앱을 다른 사람도 동시에 쓴다** — 감사 로그에 `createdBy=frontend` 호출이 계속 찍힌다. 재배포·파괴적 마이그레이션 전에 진행 중 Job(`GET /api/package-jobs`)을 확인하고 조율할 것.
+- 이 앱에 `/actuator/*`는 없다 — 기동 확인은 `GET /api/health/registry`·`/api/health/sharepoint`(`{"healthy":true}`)와 로그의 `StartupChecks` 3줄(NCR·skopeo·Graph)로 한다.
+- `docker compose up -d --build`는 컨테이너를 **재생성**해 json-file 로그를 통째로 버린다 — 장애를 추적하는 중이면 재배포 전에 `docker compose logs app`을 파일로 받아 둘 것.
+- 서버 셸의 `date`·`ls`는 **KST**, 앱 로그 타임스탬프는 **UTC**다 — tar mtime과 로그를 대조할 때 9시간을 빼먹기 쉽다.
+- 배포본에 변경이 실렸는지는 jar 문자열로 확인한다 — 앱 컨테이너엔 `unzip`/`jar`/`python3`이 없으니 `docker compose cp app:/app/app.jar /tmp/`로 꺼내 **서버 호스트의** python3 `zipfile`로 읽을 것. `docker compose exec ... grep`으로 한글을 찾으면 신·구 문자열이 **둘 다** 안 잡혀 오판한다(인코딩).
 
 # 환경변수 관리
 
 - 변수 목록·기본값·`docker-compose.yml` 주입 방식은 `backend/docs/OPERATIONS.md` §1에 있다.
 - **`.env`는 호스트마다 값이 다르다** — `WORK_DIR`/`SECRETS_DIR`/`GRAPH_REFRESH_TOKEN_FILE` 3개가 로컬 WSL과 테스트 서버에서 갈린다. 로컬 `.env`로 서버를 덮으면 앱이 없는 경로를 보고 기동에 실패한다(2026-08-13 발생). 서버 `.env`는 서버에서만 편집할 것.
+- `GraphTokenService.readRefreshToken`은 파일보다 **메모리 값을 우선**한다 — 수동 진단 등으로 토큰을 외부에서 소비해 회전시켰으면 파일에 되돌려 쓰는 것만으로는 부족하고 **앱을 재기동해야** 한다. 앱이 이미 쥔 액세스 토큰은 회전과 무관하게 만료(약 89분)까지 살아 있다.
 - Graph refresh token은 work-dir '밖'이라 compose가 별도로 마운트해야 한다. **파일 단위로 걸면 안 된다** — 토큰 회전이 `.tmp → 원본` 원자적 rename이라 마운트 경계를 넘어 실패한다. 디렉터리째 걸고(`SECRETS_DIR`), 호스트 디렉터리는 0700 + uid 1001 소유여야 한다.
 
 # 코드 패턴
@@ -100,6 +107,7 @@
 - **오류 코드는 `ErrorCode` enum 하나에만 정의한다** — 메서드 본문에서 `"E-1102: ..."`처럼 문자열로 만들지 말 것(2026-08-20 통합). 예전에는 `ErrorCode`/`ItemErrorCode` 둘뿐이라 로그 전용 코드가 갈 곳이 없어 11개가 메서드 본문에 흩어져 있었다.
 - **노출 경계는 `ErrorCode.Exposure`가 정한다.** `PUBLIC`은 HTTP 응답이나 무인증 `GET /api/package-jobs/{versionName}`의 `error_message`로 나가므로 **문구에 서버 경로·호스트를 넣지 말 것**. `LOG`는 로그에만 남아 경로를 실어도 된다. 강제는 세 겹이다 — ①`PackageItem.markFailed(ErrorCode)`가 문자열을 안 받는다 ②`ApiException`이 `LOG` 코드를 거부한다 ③`ErrorCodeExposureTest`가 `PUBLIC` 문구에 경로 패턴이 없는지, `HttpStatus`가 있는 코드가 `PUBLIC`인지 검사한다. 컨텍스트는 `toLogMessage(detail)`로만 붙이고, `ApiException`의 `details`는 값이 들어가는 자리라 검사 대상이 아니다(리뷰로 본다).
 - 컨트롤러의 `@ApiResponse(description = "E-xxxx: ...")`만 예외다 — 정의가 아니라 Swagger 문서라 유지하되, enum 문구와 따로 관리되므로 드리프트에 주의할 것.
+- `ErrorCode`에 코드를 추가하면 `docs/OPERATIONS.md` §4 표에도 넣을 것 — 실제로 E-0308이 누락됐고 옆 행 E-0501 설명이 옛 설계로 남아 있었다.
 - **HTTP 응답 메시지는 `ErrorCode` enum에만 둔다** — `ApiException`에 문자열을 넘기는 생성자는 없앴다. 컨텍스트는 `details`(키=값 형태)로 넘기고, 문구가 달라야 하는 상황이면 코드를 새로 정의할 것(예: "진행 중" E-1404 vs "그 사이 재실행됨" E-1405).
 - 항목 실패 사유(`package_item.error_message`)도 같은 규칙으로 `ItemErrorCode` enum이다. 이 값이 무인증 응답에 그대로 실리므로 서버 경로·업스트림 본문은 `PackageItemFailure.fail`의 `detail`로 넘겨 로그에만 남긴다.
 - 외부 HTTP는 트랜잭션 밖에서 부른다. **같은 빈 안에서 메서드를 나눠 불러도 프록시를 안 타므로** 쓰기 구간을 별도 빈으로 뺄 것 (`SubVersionService` → `SubVersionWriter`).
@@ -112,6 +120,7 @@
 - `BeanWiringSmokeTest`는 자동 구성 없는 베어 `AnnotationConfigApplicationContext`다 — 컴포넌트가 자동 구성 빈을 새로 주입받으면 그 빈을 `TestConfig`에 수동 등록해야 한다(실제 Boot 컨텍스트 확인은 `MainVersionApiFlowIntegrationTest`가 한다).
 - `PackageJobApiFlowIntegrationTest`의 `@AfterEach`가 **삭제 재시도**인 이유 — 비동기 Job이 방금 지운 `package_item`을 detached merge로 되살려 FK 위반이 난다(전체 스위트 부하에서만 재현). Job 상태가 종료될 때까지 기다리는 방식으로 바꾸지 말 것: 진행 중 상태를 JDBC로 직접 심고 두는 테스트가 있어 영원히 안 끝난다.
 - `UploadChunkSizeValidator`를 `GraphUploadService` 생성자로 합치지 말 것 — 업로드 테스트 8건이 10바이트 청크로 서비스를 만들어 분할 전송을 검증한다(합쳤다가 전부 기동에서 죽어 되돌림).
+- **Graph 요청 본문에 `Map.of`를 쓰지 말 것** — OData 인스턴스 애노테이션(`@microsoft.graph.*`)이 프로퍼티보다 뒤로 가면 `400 invalidRequest`다(실측: `conflictBehavior` 먼저면 200, `name` 먼저면 400). `Map.of`는 `ImmutableCollections.SALT`가 JVM 기동마다 정해져 순회 순서가 **실행마다 무작위**라 재기동 뽑기가 된다 — 같은 코드가 어제는 되고 오늘은 9건 전부 실패한다. `GraphApiClient.orderedBody`를 쓰고, 테스트는 직렬화된 본문 바이트를 `content().string(...)`으로 고정한다. MS 문서 예시의 `@odata.type`은 넣으면 **오히려** 400이다.
 - **Graph SDK(`com.microsoft.graph`) 도입은 보류다(2026-08-20 측정 후 결정).** 의존성 실해석 결과 jar +34개·+63.5MiB(런타임 55→119MiB), OkHttp+Kotlin·azure-core+reactor가 들어와 HTTP 스택 2개·JSON 라이브러리 3개가 공존한다. 정작 인증(device code로 받은 refresh token을 파일에 보관·회전)은 SDK가 대체하지 못해 217줄이 그대로 남는다. NCR용 자바 SDK는 존재하지 않는다(Maven Central `ncloud` 0건).
 
 # 리뷰 규칙
@@ -122,6 +131,7 @@
 - 서브에이전트 리뷰 결과는 **사실 주장을 실측한 뒤** 반영한다 — 특히 "프레임워크가 X를 한다"류는 임시 테스트로 재현해 볼 것(검증용 테스트는 `src/test/.../scratch/`에 만들고 확인 후 삭제, 검증용 `.bat`과 같은 취급). 실제로 이번 보안 리뷰의 MEDIUM 1건이 오탐이었다.
 - 동작을 바꾸는 수정에 회귀 테스트를 붙일 땐 **수정 전 코드에서 그 테스트가 실제로 실패하는지 먼저 확인**한다 — 통과만 확인하면 아무것도 안 잡는 가짜 안전망이 남는다.
 - 그 확인에서 **테스트 픽스처가 실제 구성과 다르면 단언이 헛돈다**. 실례: digest 보존 회귀 테스트를 붙였는데 로컬 `registry:2` 시딩이 alpine(OCI 형식)을 그대로 밀어 넣어 변환이 애초에 없었고, `--preserve-digests`를 빼도 통과했다. 시딩을 `--format v2s2`로 바꾸니 그제서야 실패했다 — dev-ncr-sb도 12개 중 9개가 schema2라 이쪽이 실제 구성이다.
+- 검사를 **약화시켜** 확인할 때는 컴파일이 깨지지 않는 형태로 할 것 — 깨지면 XML이 아예 안 생겨 집계가 0건이 되고 "실패 없음"으로 오판한다(실례: `Files.size`를 `Files.exists`로 바꾸니 `catch (IOException)`이 도달 불가가 돼 `compileJava FAILED`). `Files.size(...) >= 0`처럼 바꾸고 로그의 `compileJava` 성공 여부를 먼저 볼 것.
 - 코드베이스 전 범위 리뷰는 모듈별(`registry`/`sharepoint`/`job`/`version`/공통기반)로 나눠 병렬로 돌린다 — 한 번에 시키면 훑고 지나간다. 각 프롬프트에 그 모듈의 실측 사실(이 파일의 항목들)을 함께 넣을 것.
 - "수정 전 실패 확인"은 `git stash` 말고 손으로 되돌릴 것 — 워킹트리에 커밋 안 된 작업이 쌓여 있으면 `git stash push -- <파일>`이 그 파일의 **다른 변경까지** 전부 HEAD로 되돌린다.
 - 서브에이전트에 주입되는 CLAUDE.md는 **스폰 시점 사본**으로 보인다 — 세션 중 고친 내용을 근거로 든 지적은 최신본과 대조할 것(실제로 "CLAUDE.md에 X라고 적혀 있다"가 이미 고쳐진 내용이었다).
@@ -133,6 +143,7 @@
 - `dev-ncr-sb` 저장소 이름에는 네임스페이스가 붙는 것과 안 붙는 것이 섞여 있다 — 8개는 `acme/<name>`, 4개(`cids`·`ocr`·`piids`·`pips`)는 접두사가 없다. 이름을 추측하지 말고 `_catalog`로 먼저 확인할 것(틀리면 `repository name not known to registry`).
 - 수동 검증용 자격증명은 루트 `.env`에서 읽고 argv에 넣지 말 것 — curl은 `-K <0600 설정파일>`, skopeo는 `REGISTRY_AUTH_FILE`을 쓰고 끝나면 삭제한다(`ps`/`/proc/<pid>/cmdline` 노출 방지).
 - NCR은 **없는 저장소·없는 태그 모두 404**를 준다(401 아님) — 등록 시점 존재 검증(E-0206)이 성립하는 근거다. 2026-08-13 실측.
+- Graph 인증 문제는 **항상 401**이다 — 헤더 없음·빈 값·쓰레기 문자열·만료 JWT 넷 다 `InvalidAuthenticationToken`이다(실측). `400 invalidRequest`를 토큰 만료로 의심하지 말 것. 앱도 401만 무효화 후 1회 재시도하고 E-0451로 끝내므로, 로그의 `Graph 호출 실패(400)` + E-1101 조합은 토큰과 무관하다.
 - 반입 검증 절차(dind 버전별 확인, 벤치마크 함정, gzip ISIZE 측정, 최소 비용 검증 이미지)는 `/mnt/c/Project/반입가이드.md`.
 - distribution 규격상 **저장소명은 소문자 강제**다(`ACME/cc-sb` 푸시 시 `repository name must be lowercase`) — 대소문자 차이는 **태그에서만** 가능하다. dev-ncr-sb 실측(2026-08-20): 태그 1217건 중 대문자 포함 13건(전부 `-SNAPSHOT`), 소문자로 접었을 때 충돌 쌍 0건.
 
