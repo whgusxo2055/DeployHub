@@ -22,7 +22,7 @@ public class HealthController {
     private final GraphApiClient graphApiClient;
 
     @Operation(summary = "NCR 연결 상태 확인 (FN-04-1)")
-    @ApiResponse(responseCode = "502", description = "E-0404: Private Endpoint 도달 불가")
+    @ApiResponse(responseCode = "502", description = "E-0404: 레지스트리에 연결할 수 없습니다.")
     @GetMapping("/api/health/registry")
     public HealthResponse registryHealth() {
         ncrRegistryClient.healthCheck();
