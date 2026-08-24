@@ -20,6 +20,7 @@ import com.deployhub.version.repository.MainVersionRepository;
 import com.deployhub.version.service.PackagingEligibility;
 import com.deployhub.version.service.PackagingEligibilityService;
 import com.deployhub.version.service.VersionComparisonService;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLIntegrityConstraintViolationException;
@@ -159,7 +160,8 @@ public class PackageJobService {
      * 수동 재시도. {@code imageTags}가 비면 FAILED 전체가 대상이고, DOWNLOADED/UPLOADED는 지정해도 제외된다.
      * 되돌릴 FAILED가 없어도 태그 미지정이면 단계 재개만 시킨다(Job 단위 실패 복구).
      * 작업 디렉터리가 소실됐으면 {@code force=true}일 때만 전 항목을 되돌린다.
-     * 재개는 이 트랜잭션이 커밋된 뒤 컨트롤러가 {@link JobOrchestrator#resume}으로 호출한다.
+     * 업로드 단계에서 죽은 항목은 받아 둔 tar가 그대로면 DOWNLOADED로 되돌려 재수집을 건너뛴다.
+     * 재개는 이 트랜잭션이 커밋된 뒤 컨트롤러가 {@link JobOrchestrator#startValidated}로 호출한다.
      */
     @Transactional
     public PackageJobDetailResponse retry(String versionName, PackageItemRetryRequest request) {
@@ -184,7 +186,7 @@ public class PackageJobService {
         List<PackageItem> targets = resolveRetryTargets(allItems, request, workDirLost);
         // 되돌릴 항목이 없어도 태그를 지정하지 않은 요청은 통과시킨다 — 항목은 전부 성공했는데
         // Job 단위 실패(폴더 확보 실패 등)로 FAILED가 된 경우가 있고, 여기서 막으면 그 Job은
-        // 영구 좌초한다(FAILED라 상태 전이도 못 하고 재시도도 못 한다). resume이 다운로드·업로드를
+        // 영구 좌초한다(FAILED라 상태 전이도 못 하고 재시도도 못 한다). 재개가 다운로드·업로드를
         // 다시 돌면서 이미 끝난 항목은 알아서 건너뛴다.
         boolean explicitTargets = request.imageTags() != null && !request.imageTags().isEmpty();
         if (targets.isEmpty() && (explicitTargets || allItems.isEmpty())) {
@@ -192,7 +194,13 @@ public class PackageJobService {
         }
 
         for (PackageItem item : targets) {
+            // 상태까지 봐야 한다 — workDirLost 경로는 DOWNLOADED/UPLOADED도 targets에 넣는데,
+            // 그건 force가 명시한 전건 재수집이라 살려내면 안 된다.
+            Long downloadedSize = item.isFailedAfterDownload() ? item.getFileSize() : null;
             item.resetForRetry();
+            if (downloadedSize != null && localTarMatches(versionName, item, downloadedSize)) {
+                item.markDownloaded(downloadedSize);
+            }
         }
         packageItemRepository.saveAll(targets);
         job.changeStatus(JobStatus.DOWNLOADING);
@@ -206,6 +214,16 @@ public class PackageJobService {
                 .job(PackageJobResponse.of(job, items))
                 .items(items.stream().map(PackageItemResponse::from).toList())
                 .build();
+    }
+
+    /** 크기까지 같아야 인정한다 — 경로·형식 문제는 "없음"으로 보고 다시 받게 한다. */
+    private boolean localTarMatches(String versionName, PackageItem item, long expectedSize) {
+        try {
+            String fileName = ImageReference.parse(item.getImageTag()).tarFileName();
+            return Files.size(Path.of(workDir, versionName, "images", fileName)) == expectedSize;
+        } catch (IOException | IllegalArgumentException e) {
+            return false;
+        }
     }
 
     private List<PackageItem> resolveRetryTargets(List<PackageItem> allItems, PackageItemRetryRequest request, boolean workDirLost) {

@@ -66,6 +66,14 @@ public class PackageItem {
         this.errorMessage = errorCode.toMessage();
     }
 
+    /**
+     * FAILED지만 tar는 받아 둔 상태. {@code fileSize}를 채우는 건 {@link #markDownloaded}뿐이고
+     * {@link #resetForRetry}가 지우므로 이 조합이 "업로드 단계에서 죽었다"의 판별자가 된다.
+     */
+    public boolean isFailedAfterDownload() {
+        return status == PackageItemStatus.FAILED && fileSize != null;
+    }
+
     /** 다운로드 성공 — {@code fileSize}는 실제 산출 tar 크기다(매니페스트 예상치가 아님). */
     public void markDownloaded(long fileSize) {
         this.status = PackageItemStatus.DOWNLOADED;
