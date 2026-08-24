@@ -117,7 +117,8 @@ public class PackageJobController {
     @Operation(summary = "패키지 Job 목록 조회 (FN-11)")
     @GetMapping("/api/package-jobs")
     public List<PackageJobResponse> listJobs(
-            @Parameter(description = "상태 필터") @RequestParam(required = false) JobStatus status) {
+            @Parameter(description = "상태 필터 (정리된 Job은 DELETED)") @RequestParam(required = false)
+                    JobStatus status) {
         return packageJobService.list(status);
     }
 
@@ -126,6 +127,7 @@ public class PackageJobController {
             description = "폴더 조직 범위 공유 링크(기본 전달 창구)와 파일별 URL을 함께 제공한다.")
     @ApiResponse(responseCode = "404", description = "E-0306: 패키지 Job 없음")
     @ApiResponse(responseCode = "409", description = "E-1201: Job 미완료 — details에 현재 상태·진행률")
+    @ApiResponse(responseCode = "410", description = "E-1202: 정리된 패키지")
     @GetMapping("/api/package-jobs/{versionName}/files")
     public PackageFilesResponse getFiles(@PathVariable String versionName) {
         return packageFileService.listFiles(versionName);

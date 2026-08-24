@@ -47,9 +47,12 @@ public class PackageJob {
     @Column(name = "deleted_at")
     private Instant deletedAt;
 
-    /** 매니페스트 보호에서 "진행 중이거나 완료된" Job인지 판정한다. FAILED만 예외다. */
+    /**
+     * 매니페스트 보호에서 "진행 중이거나 완료된" Job인지 판정한다. FAILED와 DELETED는 예외다 —
+     * 정리된 Job을 잠그면 {@code resolveJob}이 허용하는 재패키징을 매니페스트 수정 불가가 막는다.
+     */
     public boolean blocksManifestModification() {
-        return status != JobStatus.FAILED;
+        return status != JobStatus.FAILED && status != JobStatus.DELETED;
     }
 
     /**
@@ -58,6 +61,10 @@ public class PackageJob {
      * {@code deleted_at}을 단 채로 남아 정리 배치의 alive 필터에서 영구히 빠지고, 멀쩡한 URL이 "만료됨"으로 표시된다.
      */
     public void changeStatus(JobStatus next) {
+        // DELETED는 markDeleted()만 찍는다 — 여기로 오면 finishedAt이 정리 시각으로 덮어써진다.
+        if (next == JobStatus.DELETED) {
+            throw new IllegalArgumentException("DELETED는 markDeleted()로만 전이한다.");
+        }
         boolean terminal = next == JobStatus.DONE || next == JobStatus.FAILED;
         this.status = next;
         this.finishedAt = terminal ? Instant.now() : null;
@@ -79,10 +86,12 @@ public class PackageJob {
 
     /**
      * SharePoint 폴더를 지운 시각을 남긴다. 행도 {@code sp_folder_*}도 지우지 않는다 —
-     * 어느 폴더가 정리됐는지가 감사 흔적이다.
+     * 어느 폴더가 정리됐는지가 감사 흔적이다. {@code status}와 {@code deleted_at}은 항상 함께 움직인다
+     * ({@code changeStatus}의 비종료 전이와 {@code resetForRerun}이 둘 다 되돌린다).
      */
     public void markDeleted() {
         this.deletedAt = Instant.now();
+        this.status = JobStatus.DELETED;
     }
 
     /** 폴더 확보(생성 또는 재사용) 결과. 재사용이면 같은 값을 다시 써도 무해하다. */

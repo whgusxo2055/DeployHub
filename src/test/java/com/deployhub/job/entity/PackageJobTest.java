@@ -1,6 +1,7 @@
 package com.deployhub.job.entity;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
 import org.junit.jupiter.api.Test;
@@ -50,7 +51,32 @@ class PackageJobTest {
         assertThat(job.getDeletedAt()).isNull();
     }
 
-    /** 보존 기한이 지나 정리 배치가 폴더를 지운 뒤의 FAILED Job. */
+    /**
+     * 정리는 status와 deleted_at을 함께 옮긴다 — 한쪽만 움직이면 매니페스트 잠금(status를 본다)과
+     * 정리 배치의 alive 필터(deleted_at을 본다)가 같은 Job을 다르게 판정한다.
+     */
+    @Test
+    void markDeleted는_status와_deletedAt을_함께_찍는다() {
+        PackageJob job = cleanedFailedJob();
+
+        assertThat(job.getStatus()).isEqualTo(JobStatus.DELETED);
+        assertThat(job.getDeletedAt()).isNotNull();
+        // 정리했으면 매니페스트를 고칠 수 있어야 한다 — 아니면 재패키징만 되고 수정은 막힌다.
+        assertThat(job.blocksManifestModification()).isFalse();
+        // 정리 시각이 종료 시각을 덮어쓰면 정리 배치의 보존 기한 계산이 어긋난다.
+        assertThat(job.getFinishedAt()).isNotNull();
+    }
+
+    /** DELETED로 가는 문은 markDeleted 하나뿐이다 — changeStatus로 오면 finishedAt이 덮어써진다. */
+    @Test
+    void changeStatus로는_DELETED로_전이할_수_없다() {
+        PackageJob job = PackageJob.builder().versionName("2027.01.01").status(JobStatus.DONE).build();
+
+        assertThatThrownBy(() -> job.changeStatus(JobStatus.DELETED))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 보존 기한이 지나 정리 배치가 폴더를 지운 뒤의 Job(정리 전에는 FAILED였다). */
     private PackageJob cleanedFailedJob() {
         PackageJob job = PackageJob.builder()
                 .versionName("2027.01.01")

@@ -299,7 +299,7 @@ public class PackageJobService {
 
     /**
      * 중복 확인. 행이 없으면 신규 생성하고, 있으면 락을 잡고 재사용 가능 여부를 판정한다 —
-     * 미삭제 DONE은 force일 때만, FAILED와 정리된 DONE은 항상, 진행 중 상태는 force로도 안 뚫린다.
+     * DONE은 force일 때만, FAILED와 DELETED는 항상, 진행 중 상태는 force로도 안 뚫린다.
      *
      * <p>존재 확인은 반드시 {@code existsById}로 할 것 — {@code findById}를 쓰면 엔티티가 1차 캐시에
      * 올라가 뒤따르는 {@code FOR UPDATE}가 stale 인스턴스를 돌려줘 락이 무력화된다.
@@ -318,11 +318,11 @@ public class PackageJobService {
                 .findByVersionName(versionName)
                 .orElseThrow(() -> new ApiException(ErrorCode.JOB_CREATION_CONFLICT));
 
-        boolean alreadyCleaned = existing.getDeletedAt() != null;
         boolean blocked =
                 switch (existing.getStatus()) {
-                    case DONE -> !alreadyCleaned && !force;
-                    case FAILED -> false;
+                    case DONE -> !force;
+                    // 정리된 Job은 내려받을 산출물이 없어 덮어쓸 것도 없다(DELETED는 DONE·FAILED 양쪽에서 온다).
+                    case DELETED, FAILED -> false;
                     default -> true; // 진행 중 — force로도 안 뚫림
                 };
         if (blocked) {

@@ -171,10 +171,15 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(queryDeletedAt("2027.03.02")).isNull();
 
         // 구현계획서 597행 — 행 자체는 지우지 않아 정리 후에도 이력 조회가 된다.
+        // 상태는 DELETED로 옮겨간다: 목록 필터(?status=DELETED)가 이 값을 그대로 쓴다.
         ResponseEntity<PackageJobDetailResponse> history = restTemplate.getForEntity(
                 "/api/package-jobs/{versionName}", PackageJobDetailResponse.class, "2027.03.01");
         assertThat(history.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(history.getBody().job().status()).isEqualTo("DONE");
+        assertThat(history.getBody().job().status()).isEqualTo("DELETED");
+        // 정리 안 된 Job은 그대로다 — 전이가 정리 대상에만 붙는지 함께 고정한다.
+        ResponseEntity<PackageJobDetailResponse> intact = restTemplate.getForEntity(
+                "/api/package-jobs/{versionName}", PackageJobDetailResponse.class, "2027.03.02");
+        assertThat(intact.getBody().job().status()).isEqualTo("DONE");
     }
 
     @Test

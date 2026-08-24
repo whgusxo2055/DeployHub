@@ -107,6 +107,7 @@ public enum ErrorCode {
 
     // E-12xx 결과 제공
     PACKAGE_NOT_READY("E-1201", HttpStatus.CONFLICT, "패키지가 아직 완료되지 않았습니다."),
+    PACKAGE_ALREADY_CLEANED("E-1202", HttpStatus.GONE, "정리된 패키지라 파일을 내려받을 수 없습니다."),
 
     // E-14xx 보존·정리
     PACKAGE_CLEANUP_BLOCKED("E-1404", HttpStatus.CONFLICT, "진행 중인 Job의 패키지는 정리할 수 없습니다."),

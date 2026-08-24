@@ -384,6 +384,27 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(blocked.getBody()).contains("E-0204");
     }
 
+    /**
+     * 부분 패키징을 지우고 전체로 다시 만드는 흐름 — 정리했으면 매니페스트를 고칠 수 있어야 한다.
+     * {@code resolveJob}은 정리된 Job의 재패키징을 이미 허용하는데 여기서 막으면 "다시 만들 수는
+     * 있는데 고칠 수는 없는" 상태가 되고, 빠져나갈 길이 패키징을 한 번 실패시키는 것뿐이었다.
+     */
+    @Test
+    void 정리된_Job은_서브버전_수정을_막지_않는다() {
+        String versionName = "2026.12.23";
+        registerMainVersion(versionName);
+        putSubVersion(versionName, new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.PENDING, null));
+        jdbcTemplate.update(
+                "INSERT INTO package_job (version_name, status, finished_at, deleted_at) "
+                        + "VALUES (?, 'DELETED', NOW(), NOW())",
+                versionName);
+
+        ResponseEntity<SubVersionSavedResponse> response = putSubVersion(
+                versionName, new SubVersionUpsertRequest("cc", "v1.1.0", null, 1, SubmitStatus.PENDING, null));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
     private void registerMainVersion(String versionName) {
         ResponseEntity<MainVersionInfoResponse> response = restTemplate.postForEntity(
                 "/api/main-versions",

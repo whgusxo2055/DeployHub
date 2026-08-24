@@ -36,8 +36,12 @@ public class PackagePurgeService {
     /** 감사 로그. 삭제는 복구 불가라 실행 계기(trigger)를 반드시 남긴다. */
     private static final Logger AUDIT = LoggerFactory.getLogger("audit");
 
-    /** 정리 가능한 종료 상태. 그 외는 진행 중이라 건드리지 않는다. */
-    private static final Set<JobStatus> TERMINAL = EnumSet.of(JobStatus.DONE, JobStatus.FAILED);
+    /**
+     * 정리 가능한 종료 상태. 그 외는 진행 중이라 건드리지 않는다. DELETED가 빠지면 이미 정리된 Job의
+     * 재정리 요청이 아래 멱등성 가드에 닿기 전에 E-1404("진행 중인 Job")라는 틀린 사유로 죽는다.
+     */
+    private static final Set<JobStatus> TERMINAL =
+            EnumSet.of(JobStatus.DONE, JobStatus.FAILED, JobStatus.DELETED);
 
     private final PackageJobRepository packageJobRepository;
     private final GraphApiClient graphApiClient;
