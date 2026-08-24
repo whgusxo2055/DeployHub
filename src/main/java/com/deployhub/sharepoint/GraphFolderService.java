@@ -77,10 +77,9 @@ public class GraphFolderService {
 
     private FolderItem createFolder(String driveId, String versionName) {
         String parentItemId = resolveParentItemId(driveId);
-        Map<String, Object> body = Map.of(
-                "name", versionName,
-                "folder", Map.of(),
-                "@microsoft.graph.conflictBehavior", "fail");
+        // conflictBehavior가 name보다 뒤로 가면 400이다 — GraphApiClient.orderedBody 참고.
+        Map<String, Object> body = GraphApiClient.orderedBody(
+                "@microsoft.graph.conflictBehavior", "fail", "name", versionName, "folder", Map.of());
         try {
             String response = graphApiClient.post("/drives/%s/items/%s/children".formatted(driveId, parentItemId), body);
             return parseFolderItem(response);

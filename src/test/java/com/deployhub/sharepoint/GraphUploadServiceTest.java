@@ -95,6 +95,11 @@ class GraphUploadServiceTest {
         String sessionPath = "/drives/drive-1/items/%s:/%s:/createUploadSession".formatted(FOLDER_ITEM_ID, fileName);
         server.expect(requestTo("https://graph.microsoft.com/v1.0" + sessionPath))
                 .andExpect(method(HttpMethod.POST))
+                // 키 순서까지 고정한다 — @microsoft.graph.* 애노테이션이 name 뒤로 가면 Graph가
+                // 400 invalidRequest를 준다(2026-08-21 실측). Map.of는 순회 순서가 실행마다 무작위다.
+                .andExpect(content().string(
+                        "{\"item\":{\"@microsoft.graph.conflictBehavior\":\"replace\",\"name\":\"%s\"}}"
+                                .formatted(fileName)))
                 .andRespond(withSuccess("{\"uploadUrl\":\"https://upload.example/session-1\"}", MediaType.APPLICATION_JSON));
 
         server.expect(requestTo("https://upload.example/session-1"))

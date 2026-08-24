@@ -12,6 +12,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 import lombok.extern.slf4j.Slf4j;
@@ -124,6 +126,18 @@ public class GraphApiClient {
             }
             throw ex;
         }
+    }
+
+    /**
+     * 순서가 보장되는 요청 본문. <b>OData 인스턴스 애노테이션({@code @microsoft.graph.*})을 먼저
+     * 넣을 것</b> — 뒤로 가면 Graph가 400 invalidRequest를 준다(2026-08-21 실측).
+     */
+    public static Map<String, Object> orderedBody(Object... keyValues) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        for (int i = 0; i < keyValues.length; i += 2) {
+            body.put((String) keyValues[i], keyValues[i + 1]);
+        }
+        return body;
     }
 
     public String post(String path, Object body) {

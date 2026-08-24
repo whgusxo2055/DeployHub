@@ -193,8 +193,9 @@ public class GraphUploadService {
     }
 
     private String createUploadSession(String driveId, String folderItemId, String fileName) {
-        Map<String, Object> body =
-                Map.of("item", Map.of("@microsoft.graph.conflictBehavior", "replace", "name", fileName));
+        // conflictBehavior가 name보다 뒤로 가면 400이다 — GraphApiClient.orderedBody 참고.
+        Map<String, Object> body = Map.of(
+                "item", GraphApiClient.orderedBody("@microsoft.graph.conflictBehavior", "replace", "name", fileName));
         String response = graphApiClient.post(
                 "/drives/%s/items/%s:/%s:/createUploadSession".formatted(driveId, folderItemId, fileName), body);
         return extractRequiredField(response, "uploadUrl", "Graph 업로드 세션 응답");

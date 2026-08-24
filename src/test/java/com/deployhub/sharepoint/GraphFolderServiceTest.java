@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
@@ -80,6 +81,10 @@ class GraphFolderServiceTest {
                 .andRespond(withSuccess("{\"id\":\"parent-1\"}", MediaType.APPLICATION_JSON));
         server.expect(requestTo(BASE + "/drives/drive-1/items/parent-1/children"))
                 .andExpect(method(HttpMethod.POST))
+                // 업로드 세션과 같은 이유로 키 순서를 고정한다 — 애노테이션이 먼저 와야 한다.
+                .andExpect(content().string(
+                        "{\"@microsoft.graph.conflictBehavior\":\"fail\",\"name\":\"%s\",\"folder\":{}}"
+                                .formatted(versionName)))
                 .andRespond(withSuccess("{\"id\":\"folder-2\",\"webUrl\":\"https://sp/folder-2\"}", MediaType.APPLICATION_JSON));
         server.expect(requestTo(BASE + "/drives/drive-1/items/folder-2/children?$top=999"))
                 .andRespond(withSuccess("{\"value\":[]}", MediaType.APPLICATION_JSON));
