@@ -56,6 +56,8 @@
 - 셸 작업 디렉터리가 도중에 `/mnt/c/Project`로 초기화되는 일이 있다 — gradlew는 항상 `cd /mnt/c/Project/backend &&`로 시작할 것.
 - `gh` CLI가 없다(WSL·Windows 양쪽). PR은 `https://github.com/whgusxo2055/DeployHub/compare/master...<브랜치>?expand=1`로 열거나 github MCP를 쓴다 — user scope + `Authorization: <PAT>` 헤더(`Bearer` 접두사 불필요), 세션을 재시작해야 도구가 붙는다.
 - **서버 앱을 다른 사람도 동시에 쓴다** — 감사 로그에 `createdBy=frontend` 호출이 계속 찍힌다. 재배포·파괴적 마이그레이션 전에 진행 중 Job(`GET /api/package-jobs`)을 확인하고 조율할 것.
+- **서버 API로는 `GET`만 부를 것** — 상태를 바꾸는 요청(`PUT`/`POST`/`DELETE`)은 사용자 확인을 받고 한다. 남의 실데이터를 덮어쓴다. 2026-08-24에 매니페스트 잠금이 풀렸는지 본다며 `PUT .../sub-versions/cc`에 `imageTags: []`를 보내 컴포넌트 2건을 날렸다 — 확인은 DB `SELECT`로 충분했다.
+- 그때의 복구 경로: `package_item`은 확정 시점 스냅샷이라 `component`가 덮어써져도 남는다. 다른 담당 영역의 태그를 소거하면 지워진 것이 특정된다(9건 중 7건 매칭 → 나머지 2건). 단 `sub_version.version`·`note`는 어디에도 안 남아 복구 불가다.
 - 이 앱에 `/actuator/*`는 없다 — 기동 확인은 `GET /api/health/registry`·`/api/health/sharepoint`(`{"healthy":true}`)와 로그의 `StartupChecks` 3줄(NCR·skopeo·Graph)로 한다.
 - `docker compose up -d --build`는 컨테이너를 **재생성**해 json-file 로그를 통째로 버린다 — 장애를 추적하는 중이면 재배포 전에 `docker compose logs app`을 파일로 받아 둘 것.
 - 서버 셸의 `date`·`ls`는 **KST**, 앱 로그 타임스탬프는 **UTC**다 — tar mtime과 로그를 대조할 때 9시간을 빼먹기 쉽다.
