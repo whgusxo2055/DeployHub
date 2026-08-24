@@ -73,7 +73,7 @@
 # 코드 패턴
 
 - **주석·Swagger는 압축한다.** `@Operation`은 `summary` 1줄만 쓰고 `description`은 달지 않는다(예외 사유는 `@ApiResponse`가 이미 담는다). 주석·javadoc은 **2줄 이내**로, "왜"만 남기고 "무엇"은 코드가 말하게 한다. 3줄이 필요하면 그건 주석이 아니라 `DEFERRED.md` 항목이거나 테스트로 남길 것.
-- `version_name`은 로컬 작업 디렉터리명(`Path.of(workDir, versionName, "images")`)과 SharePoint 폴더명으로 그대로 쓰인다 — 등록 정규식은 형식 취향이 아니라 경로 이탈 방어다(거기에 `sortKeyOf`가 `parseInt`로 파싱한다). 완화 금지. `image_tag` 쪽은 NCR REST 경로 주입만 막으면 되고 distribution 문법을 재현할 필요는 없다. tar 파일명은 `/`·`:`를 `_`로 치환할 뿐이라 단사가 아니다(`a/b:1` = `a_b:1`) — 그 충돌은 파일명이 아니라 확정 시점 검사(`assertTargetTagsValid`, E-0301)가 막는다.
+- `version_name`은 로컬 작업 디렉터리명(`Path.of(workDir, versionName, "images")`)과 SharePoint 폴더명으로 그대로 쓰인다 — 등록 정규식은 형식 취향이 아니라 경로 이탈 방어이자 **정렬 전제**다(index 3자리 고정이라 PK 문자열 비교가 곧 배포 순서). 완화 금지. `image_tag` 쪽은 NCR REST 경로 주입만 막으면 되고 distribution 문법을 재현할 필요는 없다. tar 파일명은 `/`·`:`를 `_`로 치환할 뿐이라 단사가 아니다(`a/b:1` = `a_b:1`) — 그 충돌은 파일명이 아니라 확정 시점 검사(`assertTargetTagsValid`, E-0301)가 막는다.
 - 테이블 기본 대조가 `utf8mb4_0900_ai_ci`라 **자바 `equals`와 DB 행 선택 기준이 다르다** — `cc`/`CC`·전각·ZWSP가 자바 검증을 통과하고도 같은 행을 잡는다. V4에서 `image_tag` 두 컬럼만 `utf8mb4_bin`으로 옮겼고 `code`·`version_name`은 여전히 ai_ci다. 저장·비교에는 경로 문자열이 아니라 DB에서 얻은 정규값을 쓸 것(`SubVersionWriter`의 `canonical`).
 - 제약 위반을 `catch (DataIntegrityViolationException)`으로 잡으려면 `saveAndFlush`여야 한다 — `save`는 커밋 시점에 던져 catch 밖으로 샌다.
 - `@Component` 클래스에 테스트 주입용 보조 생성자(예: `RestClient.Builder` 파라미터)를 추가하면, 실제 사용할 생성자에 `@Autowired`를 명시할 것. 생성자가 2개 이상이면 Spring이 (package-private이어도) 선택을 못 하고 "No default constructor found"로 기동이 죽는다.
@@ -114,7 +114,7 @@
 - 항목 실패 사유(`package_item.error_message`)도 같은 규칙으로 `ItemErrorCode` enum이다. 이 값이 무인증 응답에 그대로 실리므로 서버 경로·업스트림 본문은 `PackageItemFailure.fail`의 `detail`로 넘겨 로그에만 남긴다.
 - 외부 HTTP는 트랜잭션 밖에서 부른다. **같은 빈 안에서 메서드를 나눠 불러도 프록시를 안 타므로** 쓰기 구간을 별도 빈으로 뺄 것 (`SubVersionService` → `SubVersionWriter`).
 - "컴포넌트 수정"과 "매니페스트 확정"은 `MainVersionRepository.lockByVersionName`(같은 `main_version` 행)으로 직렬화한다 — 두 경로 중 하나라도 락을 안 잡으면 확정된 매니페스트와 DB가 어긋난 채 패키징이 돈다.
-- 메인버전 정렬과 "직전 버전" 판정은 `version_name`이 아니라 `sort_key`로 한다 — 문자열 비교는 index가 두 자리가 되는 순간 뒤집힌다(`'2026.08.05-10' < '2026.08.05-2'`).
+- 메인버전 정렬과 "직전 버전" 판정은 `version_name` 문자열 비교로 한다 — index를 3자리로 고정한 형식(`2026.08.24.001`, 그날 첫 릴리즈가 001)이라 그대로 배포 순서가 된다. **파생 `sort_key` 컬럼과 `sortKeyOf`는 2026-08-24에 제거했다**(V3 마이그레이션에서 기존 85건 개명). 자리수가 섞이면 전제가 깨지므로(`'...010' < '...2'`) 등록 정규식이 유일한 방어선이다. DB 정렬(utf8mb4_0900_ai_ci)이 같은 순서임은 서버에서 실측 확인했다.
 - `@ConfigurationProperties`의 `Duration`에는 `@DurationUnit`을 붙일 것 — 없으면 단위 없는 값(`5,15`)이 **밀리초**로 바인딩돼 재시도 백오프가 조용히 꺼진다. 로그가 `toSeconds()`면 항상 0초로 찍혀 눈치채기 어렵다.
 - `HttpHeaders.getValuesAsList`는 따옴표를 무시하고 콤마로 쪼갠다 — `WWW-Authenticate: Bearer realm="...",service="..."`가 두 조각으로 망가진다. 원본 헤더 줄이 필요하면 `get()`을 쓸 것.
 - `@Value`에 `Duration` 파라미터를 쓰지 말 것 — `@ConfigurationProperties`와 달리 변환기가 없어 "no matching editors"로 기동이 죽는다. 문자열로 받아 `DurationStyle.detectAndParse(값, ChronoUnit.SECONDS)`로 파싱한다 (`GraphApiClient` 참고).

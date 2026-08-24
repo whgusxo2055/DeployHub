@@ -33,7 +33,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 @ExtendWith(MockitoExtension.class)
 class SubVersionRegistryCheckTest {
 
-    private static final String VERSION = "2026.08.05";
+    private static final String VERSION = "2026.08.05.001";
     private static final String TAG = "acme/cc-sb:v1.0.108";
 
     @Mock

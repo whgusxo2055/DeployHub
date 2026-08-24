@@ -202,7 +202,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
 
     @Test
     void 정상_완료되고_tar가_docker_load로_원래_태그를_복원한다() throws IOException, InterruptedException {
-        String versionName = "2026.20.01";
+        String versionName = "2026.20.01.001";
         registerMainVersion(versionName);
         registerAndSubmitSubVersion(versionName, "test", "1.0.0", List.of(testImageTag));
 
@@ -288,7 +288,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
     @Test
     void 인덱스_이미지는_평탄화되지_않고_인덱스_digest_그대로_담긴다() throws Exception {
         Assumptions.assumeFalse(USE_REAL_NCR, "로컬 registry:2에 시딩한 멀티아치 인덱스 전용 검증입니다.");
-        String versionName = "2026.20.05";
+        String versionName = "2026.20.05.001";
         registerMainVersion(versionName);
         registerAndSubmitSubVersion(versionName, "test", "1.0.0", List.of(multiArchImageTag));
 
@@ -363,7 +363,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
      */
     @Test
     void 존재하지_않는_태그로는_Job_생성이_400으로_거절된다() {
-        String versionName = "2026.20.02";
+        String versionName = "2026.20.02.001";
         String missingTag = TEST_REPOSITORY + ":does-not-exist";
         registerMainVersion(versionName);
         registerAndSubmitSubVersion(versionName, "test", "1.0.0", List.of(missingTag));
@@ -386,7 +386,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
     /** 재시도도 같은 판정을 써야 한다 — 갈라지면 같은 오타가 생성은 400, 재시도는 200이 된다. */
     @Test
     void 존재하지_않는_태그로는_재시도도_400으로_거절된다() {
-        String versionName = "2026.20.05";
+        String versionName = "2026.20.05.001";
         String missingTag = TEST_REPOSITORY + ":does-not-exist";
         registerMainVersion(versionName);
         registerAndSubmitSubVersion(versionName, "test", "1.0.0", List.of(missingTag));
@@ -404,7 +404,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
 
     @Test
     void 수동_재시도로_FAILED_항목만_복구된다() throws IOException {
-        String versionName = "2026.20.03";
+        String versionName = "2026.20.03.001";
         registerMainVersion(versionName);
         registerAndSubmitSubVersion(versionName, "test", "1.0.0", List.of(testImageTag));
         // 오케스트레이터 실행 타이밍에 기대지 않고 FAILED 상태를 직접 만든다(기존 Phase3
@@ -438,7 +438,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
 
     @Test
     void DONE_Job은_재시도가_거부된다() {
-        String versionName = "2026.20.04";
+        String versionName = "2026.20.04.001";
         registerMainVersion(versionName);
         jdbcTemplate.update(
                 "INSERT INTO package_job (version_name, status) VALUES (?, 'DONE')", versionName);
@@ -455,7 +455,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
 
     @Test
     void 작업_디렉터리가_없으면_force_없이는_재시도가_거부된다() {
-        String versionName = "2026.20.05";
+        String versionName = "2026.20.05.001";
         registerMainVersion(versionName);
         jdbcTemplate.update(
                 "INSERT INTO package_job (version_name, status) VALUES (?, 'FAILED')", versionName);

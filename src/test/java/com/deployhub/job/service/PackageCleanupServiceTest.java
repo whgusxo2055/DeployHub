@@ -32,7 +32,7 @@ class PackageCleanupServiceTest {
     @Test
     void 그_사이_재실행된_Job은_실패가_아니라_건너뛴다() {
         PackageJob job = PackageJob.builder()
-                .versionName("2027.01.01")
+                .versionName("2027.01.01.001")
                 .status(JobStatus.DONE)
                 .finishedAt(Instant.now().minus(Duration.ofDays(400)))
                 .build();

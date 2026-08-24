@@ -53,7 +53,7 @@ class GraphFolderServiceTest {
 
     @Test
     void 폴더가_있으면_재사용하고_생성_요청을_보내지_않는다() {
-        String versionName = "2026.08.05";
+        String versionName = "2026.08.05.001";
 
         server.expect(requestTo(BASE + "/drives/drive-1/root:/Deploy/Packages/" + versionName))
                 .andExpect(method(HttpMethod.GET))
@@ -73,7 +73,7 @@ class GraphFolderServiceTest {
 
     @Test
     void 폴더가_없으면_상위_경로_밑에_생성한다() {
-        String versionName = "2026.08.06";
+        String versionName = "2026.08.06.001";
 
         server.expect(requestTo(BASE + "/drives/drive-1/root:/Deploy/Packages/" + versionName))
                 .andRespond(withStatus(HttpStatus.NOT_FOUND));
@@ -99,7 +99,7 @@ class GraphFolderServiceTest {
 
     @Test
     void 생성_중_409_충돌이면_재조회해서_재사용한다() {
-        String versionName = "2026.08.07";
+        String versionName = "2026.08.07.001";
 
         server.expect(requestTo(BASE + "/drives/drive-1/root:/Deploy/Packages/" + versionName))
                 .andRespond(withStatus(HttpStatus.NOT_FOUND));
@@ -122,7 +122,7 @@ class GraphFolderServiceTest {
 
     @Test
     void 공유_링크_발급이_거부되면_폴더_webUrl로_대체한다() {
-        String versionName = "2026.08.08";
+        String versionName = "2026.08.08.001";
 
         server.expect(requestTo(BASE + "/drives/drive-1/root:/Deploy/Packages/" + versionName))
                 .andRespond(withSuccess("{\"id\":\"folder-4\",\"webUrl\":\"https://sp/folder-4\"}", MediaType.APPLICATION_JSON));
@@ -138,7 +138,7 @@ class GraphFolderServiceTest {
 
     @Test
     void 재사용_시_기존_파일을_모두_지운다() {
-        String versionName = "2026.08.09";
+        String versionName = "2026.08.09.001";
 
         server.expect(requestTo(BASE + "/drives/drive-1/root:/Deploy/Packages/" + versionName))
                 .andRespond(withSuccess("{\"id\":\"folder-5\",\"webUrl\":\"https://sp/folder-5\"}", MediaType.APPLICATION_JSON));

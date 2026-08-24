@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 class PackageJobResponseTest {
 
     private final PackageJob job = PackageJob.builder()
-            .versionName("2026.09.01")
+            .versionName("2026.09.01.001")
             .build();
 
     /** 다운로드를 완료로 세면 업로드가 도는 내내 100%로 굳는다 — 항목당 2단계로 나눈다. */
@@ -74,14 +74,14 @@ class PackageJobResponseTest {
     @Test
     void job_상태와_메타데이터를_그대로_옮긴다() {
         PackageJob doneJob = PackageJob.builder()
-                .versionName("2026.09.01")
+                .versionName("2026.09.01.001")
                 .status(JobStatus.DONE)
                 .spFolderUrl("https://contoso.sharepoint.com/folder")
                 .build();
 
         PackageJobResponse response = PackageJobResponse.of(doneJob, List.of(item(PackageItemStatus.UPLOADED)));
 
-        assertThat(response.versionName()).isEqualTo("2026.09.01");
+        assertThat(response.versionName()).isEqualTo("2026.09.01.001");
         assertThat(response.status()).isEqualTo("DONE");
         assertThat(response.spFolderUrl()).isEqualTo("https://contoso.sharepoint.com/folder");
         assertThat(response.progress()).isEqualTo(100);
@@ -90,7 +90,7 @@ class PackageJobResponseTest {
     /** 다운로드는 끝났고 업로드에서 죽은 항목 — fileSize가 남아 있는 게 다운로드 실패와의 차이다. */
     private PackageItem failedAfterDownload() {
         return PackageItem.builder()
-                .versionName("2026.09.01")
+                .versionName("2026.09.01.001")
                 .imageTag("pips:1.0.0")
                 .status(PackageItemStatus.FAILED)
                 .fileSize(1024L)
@@ -99,7 +99,7 @@ class PackageJobResponseTest {
 
     private PackageItem item(PackageItemStatus status) {
         return PackageItem.builder()
-                .versionName("2026.09.01")
+                .versionName("2026.09.01.001")
                 .imageTag("pips:1.0.0")
                 .status(status)
                 .build();

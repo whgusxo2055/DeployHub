@@ -50,7 +50,7 @@ public class PackageJobController {
     private final PackageValidationService packageValidationService;
 
     @Operation(summary = "매니페스트 확정 + Job 생성 (FN-03, FN-11 중복방지)")
-    @ApiResponse(responseCode = "400", description = "E-0301: 잘못된/중복 image_tag, E-0303: 패키징 대상 없음"
+    @ApiResponse(responseCode = "400", description = "E-0301: 잘못된/중복/누락 image_tag"
             + ", E-0308: 레지스트리에서 확인되지 않는 image_tag")
     @ApiResponse(responseCode = "404", description = "E-0101: 메인버전 없음")
     @ApiResponse(responseCode = "409", description = "E-0302: 중복 Job"

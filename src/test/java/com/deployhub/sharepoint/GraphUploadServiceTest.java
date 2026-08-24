@@ -42,7 +42,7 @@ class GraphUploadServiceTest {
 
     private static final GraphProperties PROPERTIES =
             new GraphProperties("tenant", "client", "drive-1", "/Deploy/Packages");
-    private static final String VERSION_NAME = "2026.09.01";
+    private static final String VERSION_NAME = "2026.09.01.001";
     private static final String IMAGE_TAG = "myrepo/foo:1.0.0";
     private static final String FOLDER_ITEM_ID = "folder-9";
 

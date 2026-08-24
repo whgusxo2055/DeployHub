@@ -23,7 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 @ExtendWith(MockitoExtension.class)
 class JobOrchestratorTest {
 
-    private static final String VERSION_NAME = "2026.08.18";
+    private static final String VERSION_NAME = "2026.08.18.001";
 
     @Mock
     private PackageJobService packageJobService;

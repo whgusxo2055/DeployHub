@@ -65,7 +65,7 @@ curl -X POST 'localhost:8080/api/admin/cleanup'
 curl -X POST 'localhost:8080/api/admin/cleanup?dryRun=false'
 
 # 특정 메인버전만 즉시 정리 (보호 규칙과 무관)
-curl -X DELETE 'localhost:8080/api/package-jobs/2026.08.05/package'
+curl -X DELETE 'localhost:8080/api/package-jobs/2026.08.24.001/package'
 ```
 
 `dryRun` 기본값이 `true`인 것은 의도다 — 인증이 없어 파라미터 없는 POST 한 방이 곧 실삭제가

@@ -19,7 +19,6 @@ import com.deployhub.version.repository.ComponentRepository;
 import com.deployhub.version.repository.MainVersionRepository;
 import com.deployhub.version.service.PackagingEligibility;
 import com.deployhub.version.service.PackagingEligibilityService;
-import com.deployhub.version.service.VersionComparisonService;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -52,7 +51,6 @@ public class PackageJobService {
     private final PackageItemRepository packageItemRepository;
     private final MainVersionRepository mainVersionRepository;
     private final ComponentRepository componentRepository;
-    private final VersionComparisonService versionComparisonService;
     private final PackagingEligibilityService packagingEligibilityService;
     private final String workDir;
 
@@ -61,14 +59,12 @@ public class PackageJobService {
             PackageItemRepository packageItemRepository,
             MainVersionRepository mainVersionRepository,
             ComponentRepository componentRepository,
-            VersionComparisonService versionComparisonService,
             PackagingEligibilityService packagingEligibilityService,
             @Value("${deployhub.work-dir}") String workDir) {
         this.packageJobRepository = packageJobRepository;
         this.packageItemRepository = packageItemRepository;
         this.mainVersionRepository = mainVersionRepository;
         this.componentRepository = componentRepository;
-        this.versionComparisonService = versionComparisonService;
         this.packagingEligibilityService = packagingEligibilityService;
         this.workDir = workDir;
     }
@@ -89,13 +85,8 @@ public class PackageJobService {
                     ErrorCode.PACKAGING_BLOCKED_BY_PENDING, eligibility.blockingSubVersionCodes());
         }
 
-        List<String> changedTags = versionComparisonService.changedImageTags(versionName);
-        List<String> targetTags =
-                (request.imageTags() == null || request.imageTags().isEmpty()) ? changedTags : request.imageTags();
-        // 기준은 "선택 0건"이다 — 기본값(변경분)이 비어도 호출측이 imageTags를 명시하면 거부하지 않는다.
-        if (targetTags.isEmpty()) {
-            throw new ApiException(ErrorCode.NO_PACKAGING_TARGET);
-        }
+        // 대상은 요청이 명시한 태그가 전부다(@NotEmpty로 빈 목록은 이미 걸린다).
+        List<String> targetTags = request.imageTags();
         assertTargetTagsValid(versionName, targetTags);
 
         PackageJob job = resolveJob(versionName, request.force());
@@ -263,19 +254,9 @@ public class PackageJobService {
             throw new ApiException(ErrorCode.INVALID_IMAGE_TAG_SELECTION, List.of("duplicated"));
         }
 
-        // 등록 시점에 이미 문법을 강제하지만, 그 검증 이전에 저장된 행이 남아 있을 수 있다 —
-        // 오염된 image_tag가 package_item으로 스냅샷되지 않게 한 번 더 거른다.
         Set<String> fileNames = new HashSet<>();
         for (String tag : targetTags) {
             try {
-                // 파일명은 '/'·':'를 '_'로 치환해 만들어 단사가 아니다 — "a/b:1"과 "a_b:1"이 같은
-                // 이름이 된다. 두 항목은 같은 폴더에 병렬로 내려받으므로 여기서 막지 않으면
-                // 한쪽이 다른 쪽을 덮어쓴 채 고객사로 나간다.
-                //
-                // 이 검사가 "이번 확정본" 안에서만 도는 것으로 충분한 근거는, 업로드가 매번
-                // GraphFolderService.ensureFolder로 폴더를 비우고 전량 다시 올리기 때문이다.
-                // 그 전량 재업로드를 "이미 올라간 건 건너뛴다"로 바꾸면 이전 확정본의 파일과도
-                // 대조해야 한다.
                 if (!fileNames.add(ImageReference.parse(tag).tarFileName())) {
                     throw new ApiException(ErrorCode.INVALID_IMAGE_TAG_SELECTION, List.of("fileNameCollision", tag));
                 }

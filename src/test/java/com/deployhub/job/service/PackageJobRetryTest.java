@@ -14,7 +14,6 @@ import com.deployhub.job.repository.PackageJobRepository;
 import com.deployhub.version.repository.ComponentRepository;
 import com.deployhub.version.repository.MainVersionRepository;
 import com.deployhub.version.service.PackagingEligibilityService;
-import com.deployhub.version.service.VersionComparisonService;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -32,7 +31,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 @ExtendWith(MockitoExtension.class)
 class PackageJobRetryTest {
 
-    private static final String VERSION_NAME = "2026.08.18";
+    private static final String VERSION_NAME = "2026.08.18.001";
 
     @Mock
     private PackageJobRepository packageJobRepository;
@@ -45,9 +44,6 @@ class PackageJobRetryTest {
 
     @Mock
     private ComponentRepository componentRepository;
-
-    @Mock
-    private VersionComparisonService versionComparisonService;
 
     @Mock
     private PackagingEligibilityService packagingEligibilityService;
@@ -212,7 +208,6 @@ class PackageJobRetryTest {
                 packageItemRepository,
                 mainVersionRepository,
                 componentRepository,
-                versionComparisonService,
                 packagingEligibilityService,
                 workDir.toString());
     }

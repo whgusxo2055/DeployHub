@@ -28,9 +28,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * 이 프로젝트는 프론트엔드가 범위에서 제외된 백엔드 전용 API 서버라 Playwright E2E가
  * 검증할 화면이 없다 (구현계획서 0.1절). 대신 Phase 1 완료 기준(구현계획서 328-334행)에
  * 명시된 핵심 흐름들을 실제 MySQL 컨테이너 위에서({@link MySqlContainerSupport}) HTTP
- * 엔드투엔드로 검증한다. 변경 여부 계산 로직 자체는
- * {@link com.deployhub.version.service.VersionComparisonServiceTest}가 이미 덮으므로
- * 여기서 다시 검증하지 않는다.
+ * 엔드투엔드로 검증한다.
  */
 class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
 
@@ -67,9 +65,9 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
 
     @Test
     void 메인버전_등록부터_패키징_가능_여부_반영까지_전체_흐름이_동작한다() {
-        // "2026.09.01"처럼 점을 포함한 경로 변수가 깨지지 않는지도 함께 검증한다
+        // "2026.09.01.001"처럼 점을 포함한 경로 변수가 깨지지 않는지도 함께 검증한다
         // (구현계획서 321행 회귀 방지 요구).
-        String versionName = "2026.09.01";
+        String versionName = "2026.09.01.001";
 
         // 1. 메인버전 등록 — UTF-8 한글 필드 왕복 확인
         ResponseEntity<MainVersionInfoResponse> created = restTemplate.postForEntity(
@@ -141,7 +139,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
     /** EXT처럼 도커 이미지가 없는 서브버전 — imageTags를 비우면 컴포넌트도 안 만들고 레지스트리도 안 묻는다. */
     @Test
     void imageTags를_비우면_컴포넌트_없이_저장되고_등록이_막히지_않는다() {
-        String versionName = "2026.09.04";
+        String versionName = "2026.09.04.001";
         restTemplate.postForEntity(
                 "/api/main-versions", new MainVersionCreateRequest(versionName, null, null), MainVersionInfoResponse.class);
 
@@ -158,7 +156,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
 
     @Test
     void 서로_다른_서브버전이_같은_image_tag를_쓰면_400으로_거부된다() {
-        String versionName = "2026.09.02";
+        String versionName = "2026.09.02.001";
         restTemplate.postForEntity(
                 "/api/main-versions", new MainVersionCreateRequest(versionName, null, null), MainVersionInfoResponse.class);
 
@@ -178,7 +176,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
 
     @Test
     void Job이_있는_메인버전은_서브버전_수정이_409로_거부된다() {
-        String versionName = "2026.09.03";
+        String versionName = "2026.09.03.001";
         restTemplate.postForEntity(
                 "/api/main-versions", new MainVersionCreateRequest(versionName, null, null), MainVersionInfoResponse.class);
         putSubVersion(versionName, new SubVersionUpsertRequest("pips", "1.0.0", null, 1, SubmitStatus.PENDING, null));
@@ -201,21 +199,19 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(response.getBody()).contains("E-0204");
     }
 
-    /**
-     * 빠뜨린 담당 영역은 아무 데도 안 걸린다 — {@code computeChanges}는 현재 code만 순회하고
-     */
+    /** 복사하지 않으면 등록자가 빠뜨린 담당 영역이 아무 데도 안 걸린다. */
     @Test
     void 새_메인버전은_직전_담당_영역을_전건_PENDING으로_복사한다() {
-        registerMainVersion("2026.10.01");
+        registerMainVersion("2026.10.01.001");
         putSubVersion(
-                "2026.10.01",
+                "2026.10.01.001",
                 new SubVersionUpsertRequest("cc", "v1.0.0", "직전 배포의 변경 사항", 1, SubmitStatus.PENDING, List.of("acme/cc:v1.0.0")));
-        putSubVersion("2026.10.01", new SubVersionUpsertRequest("ocr", "v2.0.0", null, 2, SubmitStatus.PENDING, null));
+        putSubVersion("2026.10.01.001", new SubVersionUpsertRequest("ocr", "v2.0.0", null, 2, SubmitStatus.PENDING, null));
 
-        registerMainVersion("2026.10.02");
+        registerMainVersion("2026.10.02.001");
 
         MainVersionDetailResponse detail = restTemplate
-                .getForEntity("/api/main-versions/{versionName}", MainVersionDetailResponse.class, "2026.10.02")
+                .getForEntity("/api/main-versions/{versionName}", MainVersionDetailResponse.class, "2026.10.02.001")
                 .getBody();
 
         assertThat(detail.subVersions())
@@ -226,8 +222,6 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(detail.subVersions().get(0).components())
                 .extracting(ComponentResponse::imageTag)
                 .containsExactly("acme/cc:v1.0.0");
-        // 직전과 값이 같으니 변경 없음 — 증분 패키지 대상에서 자연히 빠진다.
-        assertThat(detail.subVersions()).extracting(SubVersionResponse::changed).containsOnly(false);
         assertThat(detail.subVersions()).extracting(SubVersionResponse::note).containsOnlyNulls();
 
         // 복사가 없으면 서브버전 0건이라 eligible은 똑같이 false지만 blockingCodes가 빈 배열이다.
@@ -235,7 +229,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
                 .getForEntity(
                         "/api/main-versions/{versionName}/packaging-eligibility",
                         PackagingEligibilityResponse.class,
-                        "2026.10.02")
+                        "2026.10.02.001")
                 .getBody();
         assertThat(eligibility.eligible()).isFalse();
         assertThat(eligibility.blockingSubVersionCodes()).containsExactly("cc", "ocr");
@@ -244,7 +238,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
     /** 담당자가 자기 code만 올리므로 남의 담당 영역이 요청 시점 값으로 되돌아가지 않는다. */
     @Test
     void 단건_PUT은_다른_담당_영역을_건드리지_않는다() {
-        String versionName = "2026.10.03";
+        String versionName = "2026.10.03.001";
         registerMainVersion(versionName);
         putSubVersion(versionName, new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.PENDING, null));
         putSubVersion(versionName, new SubVersionUpsertRequest("ocr", "v2.0.0", null, 2, SubmitStatus.PENDING, null));
@@ -268,7 +262,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
     /** 경로가 요청 범위를 못 박는다는 전제가 깨지면 안 된다. */
     @Test
     void 경로와_본문의_code가_다르면_400으로_거부된다() {
-        String versionName = "2026.10.04";
+        String versionName = "2026.10.04.001";
         registerMainVersion(versionName);
 
         ResponseEntity<String> response = restTemplate.exchange(
@@ -289,7 +283,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
      */
     @Test
     void 대문자가_섞인_image_tag도_대소문자를_구분해_저장된다() {
-        String versionName = "2026.12.20";
+        String versionName = "2026.12.20.001";
         registerMainVersion(versionName);
 
         ResponseEntity<SubVersionSavedResponse> saved = putSubVersion(
@@ -306,37 +300,33 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
                 .containsExactly("acme/X:v1", "acme/X:V1");
     }
 
-    /**
-     * 빈 메인버전이 "직전"으로 잡히면 복사가 0건이 되고 전건 changed로 뒤집힌다
-     * ({@code findPrevious}의 EXISTS 가드). 자동 복사가 이 가드에 의존한다.
-     */
+    /** 빈 메인버전이 "직전"으로 잡히면 복사가 0건이 된다 — {@code findPrevious}의 EXISTS 가드. */
     @Test
     void 서브버전이_비워진_메인버전은_직전으로_잡히지_않는다() {
-        registerMainVersion("2026.11.01");
-        putSubVersion("2026.11.01", new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.PENDING, null));
+        registerMainVersion("2026.11.01.001");
+        putSubVersion("2026.11.01.001", new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.PENDING, null));
 
-        registerMainVersion("2026.11.02"); // cc 복사본을 받는다
+        registerMainVersion("2026.11.02.001"); // cc 복사본을 받는다
         MainVersionDetailResponse mid = restTemplate
-                .getForEntity("/api/main-versions/{v}", MainVersionDetailResponse.class, "2026.11.02")
+                .getForEntity("/api/main-versions/{v}", MainVersionDetailResponse.class, "2026.11.02.001")
                 .getBody();
         assertThat(mid.subVersions()).hasSize(1);
         // 빈 껍데기로 만든다
         restTemplate.delete("/api/sub-versions/{id}", mid.subVersions().get(0).id());
 
-        registerMainVersion("2026.11.03"); // 11.02를 건너뛰고 11.01에서 복사돼야 한다
+        registerMainVersion("2026.11.03.001"); // 11.02를 건너뛰고 11.01에서 복사돼야 한다
 
         MainVersionDetailResponse detail = restTemplate
-                .getForEntity("/api/main-versions/{v}", MainVersionDetailResponse.class, "2026.11.03")
+                .getForEntity("/api/main-versions/{v}", MainVersionDetailResponse.class, "2026.11.03.001")
                 .getBody();
+        // 가드를 지우면 빈 11.02가 직전이 되어 복사가 0건이 된다.
         assertThat(detail.subVersions()).extracting(SubVersionResponse::code).containsExactly("cc");
-        // 가드를 지우면 빈 11.02가 직전이 되어 복사 0건 + 비교 기준도 비어 전건 changed가 된다.
-        assertThat(detail.subVersions()).extracting(SubVersionResponse::changed).containsOnly(false);
     }
 
     /** 값이 달라졌는데 "변경 없음"이면 요청자의 화면이 stale하다는 뜻이다 — 조용히 덮지 않고 거절한다. */
     @Test
     void 값을_바꾸면서_UNCHANGED로_제출하면_400_E_0208이다() {
-        String versionName = "2026.12.21";
+        String versionName = "2026.12.21.001";
         registerMainVersion(versionName);
         putSubVersion(versionName, new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.PENDING, null));
 
@@ -360,7 +350,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
     /** 확정 후에도 상태 갱신은 허용한다 — PATCH를 없앤 뒤에도 유지돼야 하는 성질이다. */
     @Test
     void 확정된_메인버전도_필드가_그대로면_상태만_바꿀_수_있다() {
-        String versionName = "2026.12.22";
+        String versionName = "2026.12.22.001";
         registerMainVersion(versionName);
         putSubVersion(versionName, new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.PENDING, null));
         jdbcTemplate.update(
@@ -391,7 +381,7 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
      */
     @Test
     void 정리된_Job은_서브버전_수정을_막지_않는다() {
-        String versionName = "2026.12.23";
+        String versionName = "2026.12.23.001";
         registerMainVersion(versionName);
         putSubVersion(versionName, new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.PENDING, null));
         jdbcTemplate.update(
@@ -417,11 +407,11 @@ class MainVersionApiFlowIntegrationTest extends MySqlContainerSupport {
     void 대소문자만_다른_code로_다시_PUT해도_자기_태그는_중복이_아니다() {
         // sub_version.code는 utf8mb4_0900_ai_ci라 DB는 'CC'와 'cc'를 같은 행으로 고른다.
         // 소유자 판정만 자바 equals면 자기 컴포넌트를 남의 것으로 보고 E-0203을 던진다.
-        registerMainVersion("2026.10.71");
-        putSubVersion("2026.10.71", new SubVersionUpsertRequest("CC", "v1.0.0", null, 1, SubmitStatus.PENDING, List.of("acme/x:v1")));
+        registerMainVersion("2026.10.71.001");
+        putSubVersion("2026.10.71.001", new SubVersionUpsertRequest("CC", "v1.0.0", null, 1, SubmitStatus.PENDING, List.of("acme/x:v1")));
 
         ResponseEntity<SubVersionSavedResponse> again = putSubVersion(
-                "2026.10.71", new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.UNCHANGED, List.of("acme/x:v1")));
+                "2026.10.71.001", new SubVersionUpsertRequest("cc", "v1.0.0", null, 1, SubmitStatus.UNCHANGED, List.of("acme/x:v1")));
 
         assertThat(again.getStatusCode()).isEqualTo(HttpStatus.OK);
     }

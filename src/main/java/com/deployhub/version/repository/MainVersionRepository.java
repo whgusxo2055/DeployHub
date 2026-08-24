@@ -22,8 +22,7 @@ public interface MainVersionRepository extends JpaRepository<MainVersion, String
     Optional<MainVersion> lockByVersionName(@Param("versionName") String versionName);
 
     /**
-     * 목록 조회. 정렬은 {@code version_name}이 아니라 {@code sort_key}로 한다 —
-     * index가 두 자리가 되면 문자열 비교가 뒤집힌다({@link MainVersion#sortKeyOf} 참고).
+     * 목록 조회. index가 3자리 고정이라 {@code version_name} 문자열 정렬이 곧 배포 순서다.
      *
      * <p>쿼리에 {@code ORDER BY}가 박혀 있어 {@code Pageable}의 {@code sort}는 뒤에 덧붙기만 한다
      * (사실상 무시된다). 정렬 기준을 노출할 계획이 없어 의도적으로 고정해 둔다.
@@ -31,7 +30,7 @@ public interface MainVersionRepository extends JpaRepository<MainVersion, String
     @Query("""
             SELECT m FROM MainVersion m
             WHERE :keyword IS NULL OR m.versionName LIKE CONCAT('%', :keyword, '%')
-            ORDER BY m.sortKey DESC
+            ORDER BY m.versionName DESC
             """)
     Page<MainVersion> search(@Param("keyword") String keyword, Pageable pageable);
 
@@ -43,10 +42,10 @@ public interface MainVersionRepository extends JpaRepository<MainVersion, String
      */
     @Query("""
             SELECT m FROM MainVersion m
-            WHERE m.sortKey < :sortKey
+            WHERE m.versionName < :versionName
               AND EXISTS (SELECT 1 FROM SubVersion s WHERE s.mainVersionName = m.versionName)
-            ORDER BY m.sortKey DESC
+            ORDER BY m.versionName DESC
             LIMIT 1
             """)
-    Optional<MainVersion> findPrevious(@Param("sortKey") String sortKey);
+    Optional<MainVersion> findPrevious(@Param("versionName") String versionName);
 }

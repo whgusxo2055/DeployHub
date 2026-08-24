@@ -29,7 +29,7 @@ class PackageJobTest {
     @Test
     void 종료_상태로_전이하면_finishedAt을_찍는다() {
         PackageJob job = PackageJob.builder()
-                .versionName("2027.01.01")
+                .versionName("2027.01.01.001")
                 .status(JobStatus.UPLOADING)
                 .build();
 
@@ -70,7 +70,7 @@ class PackageJobTest {
     /** DELETED로 가는 문은 markDeleted 하나뿐이다 — changeStatus로 오면 finishedAt이 덮어써진다. */
     @Test
     void changeStatus로는_DELETED로_전이할_수_없다() {
-        PackageJob job = PackageJob.builder().versionName("2027.01.01").status(JobStatus.DONE).build();
+        PackageJob job = PackageJob.builder().versionName("2027.01.01.001").status(JobStatus.DONE).build();
 
         assertThatThrownBy(() -> job.changeStatus(JobStatus.DELETED))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -79,7 +79,7 @@ class PackageJobTest {
     /** 보존 기한이 지나 정리 배치가 폴더를 지운 뒤의 Job(정리 전에는 FAILED였다). */
     private PackageJob cleanedFailedJob() {
         PackageJob job = PackageJob.builder()
-                .versionName("2027.01.01")
+                .versionName("2027.01.01.001")
                 .status(JobStatus.FAILED)
                 .build();
         job.changeStatus(JobStatus.FAILED);

@@ -45,7 +45,6 @@ public class MainVersionService {
     private final SubVersionRepository subVersionRepository;
     private final ComponentRepository componentRepository;
     private final PackageJobRepository packageJobRepository;
-    private final VersionComparisonService versionComparisonService;
     private final PackagingEligibilityService packagingEligibilityService;
 
     @Transactional
@@ -58,13 +57,11 @@ public class MainVersionService {
         try {
             saved = mainVersionRepository.saveAndFlush(MainVersion.builder()
                     .versionName(request.versionName())
-                    .sortKey(MainVersion.sortKeyOf(request.versionName()))
                     .releaseNote(request.releaseNote())
                     .sqlScript(request.sqlScript())
                     .build());
         } catch (DataIntegrityViolationException e) {
-            // uk_main_version_sort_key. 등록 정규식이 정규형만 받으므로 정상 경로에서는 안 걸리고,
-            // 그 정규식이 느슨하던 시절에 들어온 옛 행('2026.08.05.1' 등)과 겹칠 때만 남는다.
+            // existsById를 지나쳐 온 PK 경합 — 동시 등록 두 건 중 뒤에 온 쪽이다.
             throw new ApiException(
                     ErrorCode.MAIN_VERSION_ALREADY_EXISTS, List.of("versionName=" + request.versionName()));
         }
@@ -77,8 +74,8 @@ public class MainVersionService {
      * note는 제외(직전 배포의 변경 사항이 릴리즈 노트에 실린다). 레지스트리 재확인·락 없음.
      */
     private void copySubVersionsFromPrevious(String versionName) {
-        String previous = versionComparisonService
-                .findPreviousMainVersion(versionName)
+        String previous = mainVersionRepository
+                .findPrevious(versionName)
                 .map(MainVersion::getVersionName)
                 .orElse(null);
         if (previous == null) {
@@ -139,13 +136,9 @@ public class MainVersionService {
                 .stream()
                 .collect(Collectors.groupingBy(Component::getSubVersionId));
 
-        Map<Long, SubVersionChange> changes = versionComparisonService.computeChanges(versionName);
-
         List<SubVersionResponse> subVersionResponses = subVersions.stream()
                 .map(subVersion -> toSubVersionResponse(
-                        subVersion,
-                        componentsBySubVersionId.getOrDefault(subVersion.getId(), List.of()),
-                        changes.get(subVersion.getId())))
+                        subVersion, componentsBySubVersionId.getOrDefault(subVersion.getId(), List.of())))
                 .toList();
 
         int componentCount = componentsBySubVersionId.values().stream().mapToInt(List::size).sum();
@@ -203,16 +196,11 @@ public class MainVersionService {
         return counts.stream().collect(Collectors.toMap(VersionCount::versionName, VersionCount::count));
     }
 
-    private SubVersionResponse toSubVersionResponse(
-            SubVersion subVersion, List<Component> components, SubVersionChange change) {
-        boolean subVersionChanged = change != null && change.changed();
-        Map<String, Boolean> componentChanges = change == null ? Map.of() : change.componentChangedByImageTag();
-
+    private SubVersionResponse toSubVersionResponse(SubVersion subVersion, List<Component> components) {
         List<ComponentResponse> componentResponses = components.stream()
                 .map(component -> ComponentResponse.builder()
                         .imageTag(component.getImageTag())
                         .sortOrder(component.getSortOrder())
-                        .changed(componentChanges.getOrDefault(component.getImageTag(), true))
                         .build())
                 .toList();
 
@@ -224,7 +212,6 @@ public class MainVersionService {
                 .sortOrder(subVersion.getSortOrder())
                 .submitStatus(subVersion.getSubmitStatus().name())
                 .submittedAt(subVersion.getSubmittedAt())
-                .changed(subVersionChanged)
                 .components(componentResponses)
                 .build();
     }

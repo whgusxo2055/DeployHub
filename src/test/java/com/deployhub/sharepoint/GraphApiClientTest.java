@@ -121,7 +121,7 @@ class GraphApiClientTest {
                 .andRespond(withSuccess("{\"id\":\"folder-1\"}", MediaType.APPLICATION_JSON));
 
         String response = client.post(
-                "/drives/d1/items/parent/children", Map.of("name", "2026.08.05", "folder", Map.of()));
+                "/drives/d1/items/parent/children", Map.of("name", "2026.08.05.001", "folder", Map.of()));
 
         assertThat(response).contains("folder-1");
     }
