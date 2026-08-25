@@ -43,6 +43,7 @@ public class NcrRegistryClient {
     private static final Pattern BEARER_SCHEME = Pattern.compile("(?i)\\bbearer\\b");
     private static final Pattern PARAM = Pattern.compile("(\\w+)\\s*=\\s*\"([^\"]*)\"");
 
+    private static final String BASE_PATH = "/v2/";
     private static final String DIGEST_HEADER = "Docker-Content-Digest";
     // 단일 매니페스트 2종 + 인덱스 2종을 모두 보낼 것. 하나라도 빠지면 레지스트리가 있는 이미지를
     // 404(MANIFEST_UNKNOWN)로 돌려줘 "이미지 없음"으로 오판한다.
@@ -267,21 +268,25 @@ public class NcrRegistryClient {
         }
     }
 
-    /** {@code GET /v2/} 도달성만 확인한다. 200/401 모두 "도달 가능"이다. */
-    public boolean isReachable() {
-        try {
-            restClient.get().uri("/v2/").retrieve().toBodilessEntity();
-            return true;
-        } catch (RestClientResponseException ex) {
-            return ex.getStatusCode().value() == 401;
-        } catch (ResourceAccessException ex) {
-            log.warn("NCR({})에 연결할 수 없습니다: {}", properties.endpoint(), ex.getMessage());
-            return false;
-        }
-    }
-
+    /**
+     * 도달성이 아니라 <b>자격증명</b>까지 본다 — 무인증 호출은 키가 죽어도 401이라 healthy로 보인다.
+     * 경로가 {@code /v2/}인 이유는 실측이다: scope 없는 토큰으로 {@code /v2/_catalog}는 403이고
+     * (챌린지에 scope가 없어 요청할 방법도 없다) pull 전용 키로는 기동이 통째로 막힌다.
+     */
     public void healthCheck() {
-        if (!isReachable()) {
+        try {
+            authenticated(BASE_PATH, auth -> restClient
+                    .get()
+                    .uri(BASE_PATH)
+                    .header(HttpHeaders.AUTHORIZATION, auth)
+                    .retrieve()
+                    .toBodilessEntity());
+        } catch (RetryableCallException e) {
+            // 헬스체크는 1회 호출이라 재시도로 감싸지 않는다 — 최종 오류를 그대로 노출한다.
+            throw e.giveUpException();
+        } catch (RestClientResponseException e) {
+            // classify가 401/403·5xx 외에는 원본을 그대로 돌려준다 — 그대로 새면 E-1101(500)이 되고
+            // 예외 메시지에 업스트림 응답 본문이 실린다.
             throw new ApiException(ErrorCode.REGISTRY_UNREACHABLE);
         }
     }

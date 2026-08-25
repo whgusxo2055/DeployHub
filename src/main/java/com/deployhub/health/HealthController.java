@@ -10,8 +10,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 외부 저장소 연결 상태 확인. 실패 시 예외를 그대로 던져 E-04xx로 응답한다 — NCR은 재시도 없이
- * 1회 호출하고, Graph는 {@code GraphApiClient.get}의 재시도 정책을 그대로 탄다.
+ * 외부 저장소 연동 확인. 실패 시 예외를 그대로 던져 E-04xx로 응답한다 — 양쪽 다 자격증명까지
+ * 검증한다. NCR은 재시도 없이 토큰 왕복까지만 하고, Graph는 {@code GraphApiClient.get}의 재시도 정책을 탄다.
  */
 @RestController
 @Tag(name = "외부 저장소 연동")
@@ -21,8 +21,10 @@ public class HealthController {
     private final NcrRegistryClient ncrRegistryClient;
     private final GraphApiClient graphApiClient;
 
-    @Operation(summary = "NCR 연결 상태 확인 (FN-04-1)")
+    @Operation(summary = "NCR 연결·자격증명 확인 (FN-04-1)")
+    @ApiResponse(responseCode = "401", description = "E-0401: 레지스트리 인증 실패 (키 오류·만료)")
     @ApiResponse(responseCode = "502", description = "E-0404: 레지스트리에 연결할 수 없습니다.")
+    @ApiResponse(responseCode = "504", description = "E-0402: 레지스트리 응답 시간 초과")
     @GetMapping("/api/health/registry")
     public HealthResponse registryHealth() {
         ncrRegistryClient.healthCheck();

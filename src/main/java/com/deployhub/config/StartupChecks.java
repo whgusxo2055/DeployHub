@@ -31,9 +31,9 @@ public class StartupChecks implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        log.info("NCR Endpoint 도달성을 확인합니다.");
+        log.info("NCR 연결 및 자격증명을 확인합니다.");
         ncrRegistryClient.healthCheck();
-        log.info("NCR Endpoint 도달 확인 완료.");
+        log.info("NCR 확인 완료.");
 
         log.info("skopeo 실행 가능 여부를 확인합니다: {}", ncrProperties.cliPath());
         // 경로 구분자 없는 이름은 PATH로 찾아 실행되므로 CWD 기준 isExecutable이 잘못 실패한다 —

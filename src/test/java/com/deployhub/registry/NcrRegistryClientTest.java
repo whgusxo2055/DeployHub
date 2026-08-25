@@ -51,17 +51,39 @@ class NcrRegistryClientTest {
     }
 
     @Test
-    void v2_경로가_200이면_도달_가능으로_판단한다() {
-        server.expect(requestTo("https://ncr.example.com/v2/")).andRespond(withSuccess());
+    void 헬스체크는_Bearer_토큰까지_받아야_통과한다() {
+        server.expect(requestTo("https://ncr.example.com/v2/"))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
+                        .header(
+                                HttpHeaders.WWW_AUTHENTICATE,
+                                "Bearer realm=\"https://ncr.example.com/auth/token\",service=\"ncr\""));
+        server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr"))
+                .andRespond(withSuccess("{\"token\":\"tok-123\"}", MediaType.TEXT_PLAIN));
+        server.expect(requestTo("https://ncr.example.com/v2/"))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer tok-123"))
+                .andRespond(withSuccess());
 
-        assertThat(client.isReachable()).isTrue();
+        client.healthCheck();
+        server.verify();
     }
 
+    /**
+     * 무인증 도달성만 보던 시절에는 키가 죽어도 healthy였다 — 그 오진이 첫 Job까지 숨는다.
+     * 토큰 발급이 401이면 헬스체크가 반드시 실패해야 한다.
+     */
     @Test
-    void v2_경로가_401이어도_도달_가능으로_판단한다() {
-        server.expect(requestTo("https://ncr.example.com/v2/")).andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+    void 자격증명이_틀리면_헬스체크가_E_0401로_실패한다() {
+        server.expect(requestTo("https://ncr.example.com/v2/"))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
+                        .header(
+                                HttpHeaders.WWW_AUTHENTICATE,
+                                "Bearer realm=\"https://ncr.example.com/auth/token\",service=\"ncr\""));
+        server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr"))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
 
-        assertThat(client.isReachable()).isTrue();
+        assertThatThrownBy(() -> client.healthCheck())
+                .isInstanceOf(ApiException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.REGISTRY_UNAUTHORIZED);
     }
 
     @Test
