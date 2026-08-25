@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -32,19 +33,21 @@ public class PackageValidationService {
 
     public Map<String, ManifestInfo> validate(String versionName) {
         // PENDING만 본다 — 생성 직후에는 전 항목이, 재시도에서는 되돌린 항목만 PENDING이라
-        // 두 경로가 같은 규칙으로 "아직 처리 안 된 것"만 확인하게 된다.
         List<PackageItem> items = packageItemRepository.findByVersionNameOrderByImageTagAsc(versionName).stream()
                 .filter(item -> item.getStatus() == PackageItemStatus.PENDING)
                 .toList();
-        // 입력 순서가 그대로 유지되므로 인덱스로 짝지어도 안전하다(BoundedParallelism).
-        List<TagCheck> checks =
-                imageTagChecker.checkAll(items.stream().map(PackageItem::getImageTag).toList());
+
+        // 결과 순서에 기대지 않고 태그로 짝짓는다 — 순서가 어긋나면 다른 항목의 digest가 붙어
+        // 다운로드 직후 무결성 대조(E-0603)가 엉뚱하게 터진다.
+        Map<String, TagCheck> checkByTag = imageTagChecker
+                .checkAll(items.stream().map(PackageItem::getImageTag).toList())
+                .stream()
+                .collect(Collectors.toMap(TagCheck::imageTag, check -> check));
 
         List<PackageItem> missing = new ArrayList<>();
         Map<String, ManifestInfo> context = new HashMap<>();
-        for (int i = 0; i < items.size(); i++) {
-            PackageItem item = items.get(i);
-            TagCheck check = checks.get(i);
+        for (PackageItem item : items) {
+            TagCheck check = checkByTag.get(item.getImageTag());
             if (check.found()) {
                 context.put(item.getImageTag(), check.manifestInfo());
                 continue;

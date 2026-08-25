@@ -1,15 +1,14 @@
 package com.deployhub.registry;
 
 import com.deployhub.common.ApiException;
-import com.deployhub.common.BoundedParallelism;
+import com.deployhub.common.Concurrency;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.registry.NcrRegistryClient.ManifestInfo;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
@@ -21,25 +20,21 @@ import org.springframework.stereotype.Service;
 public class ImageTagChecker {
 
     private final NcrRegistryClient ncrRegistryClient;
-    private final Executor manifestExecutor;
-    // manifestExecutor 풀 크기와 반드시 같아야 한다 — 같은 프로퍼티를 읽어 어긋날 수 없게 한다.
-    private final int concurrency;
+    // 동시 조회 수는 이 풀의 고정 크기가 정한다 — 호출부가 따로 상한을 들고 있지 않는다.
+    private final ExecutorService manifestExecutor;
 
     public ImageTagChecker(
-            NcrRegistryClient ncrRegistryClient,
-            @Qualifier("manifestExecutor") Executor manifestExecutor,
-            @Value("${deployhub.manifest.concurrency:5}") int concurrency) {
+            NcrRegistryClient ncrRegistryClient, @Qualifier("manifestExecutor") ExecutorService manifestExecutor) {
         this.ncrRegistryClient = ncrRegistryClient;
         this.manifestExecutor = manifestExecutor;
-        this.concurrency = concurrency;
     }
 
     /**
-     * 결과는 입력 순서를 유지한다. 401/403만 그대로 던진다 — 자격증명 문제를 "이미지 없음"으로
+     * 401/403만 그대로 던진다 — 자격증명 문제를 "이미지 없음"으로
      * 뭉개면 운영자가 원인을 못 찾는다. 나머지 레지스트리 오류는 "확인 불가"라 항목 실패로 강등한다.
      */
     public List<TagCheck> checkAll(List<String> imageTags) {
-        return BoundedParallelism.mapInBatches(imageTags, concurrency, manifestExecutor, this::checkOne);
+        return Concurrency.mapAll(manifestExecutor, imageTags, this::checkOne);
     }
 
     private TagCheck checkOne(String imageTag) {

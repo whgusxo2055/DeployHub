@@ -17,6 +17,12 @@ spring:
     username: ${DB_USERNAME:deployhub}
     password: ${DB_PASSWORD:deployhub}
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      # 다운로드 워커(DOWNLOAD_CONCURRENCY, 기본 9)가 항목마다 상태를 저장하고 Job 스레드·폴링
+      # API가 겹친다 — 기본 10으로는 모자란다. 동시성을 올리면 이 값도 함께 올릴 것.
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      # 저장은 밀리초 단위라 이걸 다 쓰면 풀 부족이 확정이다(기본 30초는 너무 늦게 드러난다).
+      connection-timeout: 10000
 
   jpa:
     hibernate:
@@ -75,15 +81,14 @@ deployhub:
   job:
     concurrency: ${JOB_CONCURRENCY:3}
 
-  # 매니페스트 조회 동시 요청 상한. manifestExecutor 풀 크기와 검증 배치 크기가 이 값 하나를
-  # 공유한다(NCR 전체가 나눠 쓰는 전역 상한). 튜닝 대상이 아니라 placeholder를 두지 않았을 뿐,
-  # relaxed binding으로 DEPLOYHUB_MANIFEST_CONCURRENCY 덮어쓰기는 여전히 가능하다.
+  # 매니페스트 조회 동시 요청 상한(= manifestExecutor 풀 크기). NCR 전체가 나눠 쓰는 전역 상한이다.
+  # 튜닝 대상이 아니라 placeholder를 두지 않았을 뿐, DEPLOYHUB_MANIFEST_CONCURRENCY로 덮어쓸 수 있다.
   manifest:
     concurrency: 5
 
-  # 다운로드. downloadExecutor 풀 크기가 JOB_CONCURRENCY × download.concurrency다.
+  # 다운로드. concurrency가 곧 서버 전체의 동시 skopeo 수 상한이다(Job별로 나누지 않는다).
   download:
-    concurrency: ${DOWNLOAD_CONCURRENCY:3}
+    concurrency: ${DOWNLOAD_CONCURRENCY:9}
     skopeo-timeout: ${SKOPEO_TIMEOUT:1800}
 
   # 업로드. 320 KiB(327680)의 배수여야 한다 — 아니면 UploadChunkSizeValidator가 기동을 막는다.

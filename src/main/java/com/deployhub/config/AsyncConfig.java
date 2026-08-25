@@ -1,5 +1,8 @@
 package com.deployhub.config;
 
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -31,36 +34,24 @@ public class AsyncConfig {
     }
 
     /**
-     * 매니페스트 조회 전용. {@code @Async}가 아니라 {@code ImageTagChecker}가 직접 제출한다 —
-     * 풀 크기와 배치 크기가 같아야 해서 같은 프로퍼티를 읽지만 <b>기본값 리터럴은 양쪽에 하나씩</b>이다.
-     * 한쪽만 고치면 조용히 갈라지므로 함께 고칠 것.
+     * 매니페스트 조회 전용. {@code @Async}가 아니라 {@code ImageTagChecker}가 전건 제출하므로 풀
+     * 크기가 곧 동시 조회 수다. 큐는 무제한(항목당 클로저 하나) — 과부하 차단은 {@code jobExecutor}가 맡는다.
      */
-    @Bean("manifestExecutor")
-    public ThreadPoolTaskExecutor manifestExecutor(@Value("${deployhub.manifest.concurrency:5}") int concurrency) {
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(concurrency);
-        executor.setMaxPoolSize(concurrency);
-        executor.setQueueCapacity(200);
-        executor.setThreadNamePrefix("manifest-");
-        executor.initialize();
-        return executor;
+    @Bean(name = "manifestExecutor", destroyMethod = "shutdownNow")
+    public ExecutorService manifestExecutor(@Value("${deployhub.manifest.concurrency:5}") int concurrency) {
+        return fixedPool(concurrency, "manifest-");
     }
 
-    /**
-     * 다운로드 전용. 풀 크기가 {@code JOB_CONCURRENCY × DOWNLOAD_CONCURRENCY}라 Job 전체가 공유해도
-     * "Job당 최대 DOWNLOAD_CONCURRENCY개 동시"가 성립한다 — Job이 한 배치를 끝내야 다음을 제출하기 때문이다.
-     */
-    @Bean("downloadExecutor")
-    public ThreadPoolTaskExecutor downloadExecutor(
-            @Value("${deployhub.job.concurrency:3}") int jobConcurrency,
-            @Value("${deployhub.download.concurrency:3}") int downloadConcurrency) {
-        int size = jobConcurrency * downloadConcurrency;
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(size);
-        executor.setMaxPoolSize(size);
-        executor.setQueueCapacity(200);
-        executor.setThreadNamePrefix("download-");
-        executor.initialize();
-        return executor;
+    /** 서버 전체의 동시 skopeo 수 상한. Job별로 나누지 않으므로 Job 하나가 한가한 슬롯을 다 써도 된다. */
+    @Bean(name = "downloadExecutor", destroyMethod = "shutdownNow")
+    public ExecutorService downloadExecutor(@Value("${deployhub.download.concurrency:9}") int concurrency) {
+        return fixedPool(concurrency, "download-");
+    }
+
+    /** {@code shutdownNow}로 파괴한다 — 기본 추론값 {@code shutdown()}은 4GB 다운로드가 끝날 때까지 종료를 막는다. */
+    private static ExecutorService fixedPool(int size, String threadNamePrefix) {
+        AtomicInteger counter = new AtomicInteger();
+        return Executors.newFixedThreadPool(
+                size, runnable -> new Thread(runnable, threadNamePrefix + counter.incrementAndGet()));
     }
 }

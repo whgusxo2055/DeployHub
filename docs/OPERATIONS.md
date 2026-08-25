@@ -20,7 +20,9 @@
 | `SWAGGER_ENABLED` | `true` | 운영에서는 끄거나 nginx로 내부 IP만 허용 |
 | `CORS_ALLOWED_ORIGINS` | — | 프론트엔드 **브라우저 주소창**의 오리진이다(이 백엔드 IP가 아니다). 스킴 필수, 포트 와일드카드는 `:[*]` |
 | `UPLOAD_CHUNK_SIZE` | `10485760` | 320 KiB의 양의 배수 + 60 MiB 이하만 허용. 아니면 기동 실패(E-1108) |
-| `JOB_CONCURRENCY` | `3` | 동시 Job 수. skopeo 프로세스는 최대 `JOB_CONCURRENCY × DOWNLOAD_CONCURRENCY`개까지 뜬다 |
+| `JOB_CONCURRENCY` | `3` | 동시 Job 수. 큐(100)까지 차면 E-1502 |
+| `DOWNLOAD_CONCURRENCY` | `9` | **서버 전체**의 동시 skopeo 수 상한. Job별로 나누지 않아 Job 하나가 다 쓸 수 있다 |
+| `DB_POOL_SIZE` | `20` | Hikari 최대 커넥션. `DOWNLOAD_CONCURRENCY` + Job 스레드 + 폴링 API보다 커야 한다 — **동시성을 올리면 같이 올릴 것** |
 | `RETENTION_DAYS` | `90` | SharePoint 폴더 보존 기간. **1 미만이면 기동 실패** |
 | `RETENTION_COUNT` | `10` | 기한이 지나도 보호할 최근 건수. 음수면 기동 실패 |
 | `LOCAL_CLEANUP_DELAY_HOURS` | `24` | 업로드 완료 후 작업 디렉터리 삭제 유예 |
@@ -137,9 +139,9 @@ curl -sS -o /dev/null -D - https://<host>/v2/
 ## 5. 알려진 제약
 
 - **Job 이력은 메인버전당 1건이다.** `package_job`의 PK가 `version_name`이라 `force` 재생성 시
-  이전 이력이 덮어써진다. 최소한의 흔적은 `audit` 로거가 남긴다(Job 생성자·매니페스트 구성·
-  강제 여부·정리 대상). 지금은 stdout으로 나가므로 **컨테이너를 재기동하면 소실된다** —
-  이력 보존이 실제 요구가 되면 별도 appender와 `package_job` 대리키가 정공법이다.
+  이전 이력이 덮어써진다. 최소한의 흔적은 서비스 로그가 남긴다(`job-created`·`package-purge`·
+  `cleanup-batch` 줄). 지금은 stdout으로 나가므로 **컨테이너를 재기동하면 소실된다** —
+  이력 보존이 실제 요구가 되면 `package_job` 대리키가 정공법이다.
 - **인증이 없다.** `/api/**` 전체가 무인증이고 CORS도 열려 있다. 사내망 격리를 전제로 수용한
   리스크이므로, NCP ACG에서 소스 IP를 반드시 제한한다.
 - **정리는 단일 인스턴스를 전제로 한다.** 여러 인스턴스를 띄우면 스케줄러가 같은 대상을

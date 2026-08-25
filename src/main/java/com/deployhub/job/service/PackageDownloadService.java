@@ -1,7 +1,7 @@
 package com.deployhub.job.service;
 
 import com.deployhub.common.ErrorCode;
-import com.deployhub.common.BoundedParallelism;
+import com.deployhub.common.Concurrency;
 import com.deployhub.common.CredentialMasker;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
@@ -27,7 +27,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
@@ -56,9 +56,9 @@ public class PackageDownloadService {
     private final NcrProperties ncrProperties;
     private final RetryProperties retryProperties;
     private final ObjectMapper objectMapper;
-    private final Executor downloadExecutor;
+    // 동시 다운로드 수는 이 풀의 고정 크기가 정한다.
+    private final ExecutorService downloadExecutor;
     private final String workDir;
-    private final int downloadConcurrency;
     private final int skopeoTimeoutSeconds;
 
     public PackageDownloadService(
@@ -67,9 +67,8 @@ public class PackageDownloadService {
             NcrProperties ncrProperties,
             RetryProperties retryProperties,
             ObjectMapper objectMapper,
-            @Qualifier("downloadExecutor") Executor downloadExecutor,
+            @Qualifier("downloadExecutor") ExecutorService downloadExecutor,
             @Value("${deployhub.work-dir}") String workDir,
-            @Value("${deployhub.download.concurrency:3}") int downloadConcurrency,
             @Value("${deployhub.download.skopeo-timeout:1800}") int skopeoTimeoutSeconds) {
         this.packageItemRepository = packageItemRepository;
         this.ncrRegistryClient = ncrRegistryClient;
@@ -78,7 +77,6 @@ public class PackageDownloadService {
         this.objectMapper = objectMapper;
         this.downloadExecutor = downloadExecutor;
         this.workDir = workDir;
-        this.downloadConcurrency = downloadConcurrency;
         this.skopeoTimeoutSeconds = skopeoTimeoutSeconds;
     }
 
@@ -102,10 +100,9 @@ public class PackageDownloadService {
 
         AuthFile authFile = writeAuthFile();
         try {
-            List<Boolean> results = BoundedParallelism.mapInBatches(
-                    targets,
-                    downloadConcurrency,
+            List<Boolean> results = Concurrency.mapAll(
                     downloadExecutor,
+                    targets,
                     item -> downloadItemWithRetry(item, manifestContext.get(item.getImageTag()), imagesDir, authFile));
             if (results.contains(Boolean.FALSE)) {
                 throw new IllegalStateException("일부 항목 다운로드에 실패했습니다.");
@@ -280,8 +277,15 @@ public class PackageDownloadService {
         pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
         // 기본값이 파이프라 닫지 않으면 프로세스가 끝나도 파일 디스크립터가 GC까지 남는다.
         pb.redirectInput(ProcessBuilder.Redirect.from(nullDevice()));
+        Process process;
         try {
-            Process process = pb.start();
+            process = pb.start();
+        } catch (IOException e) {
+            // StartupChecks가 조기 검출하지만 기동 이후 경로가 사라지는 경우를 방어한다.
+            // 바이너리 누락은 재시도해도 소용없다 — 코드를 함께 실어 백오프를 건너뛰게 한다.
+            return new SkopeoResult(-1, e.getMessage(), false, ErrorCode.SKOPEO_NOT_EXECUTABLE);
+        }
+        try {
             // StringBuilder가 아니라 StringBuffer — join() 타임아웃 시 리더 스레드가 쓰는 도중 읽게 된다.
             StringBuffer stderrBuffer = new StringBuffer();
             // stderr 파이프가 OS 버퍼를 채우면 자식이 write()에서 막혀 타임아웃으로 오판된다 —
@@ -308,11 +312,10 @@ public class PackageDownloadService {
             stderrReader.join(Duration.ofSeconds(5).toMillis());
             int exitCode = finished ? process.exitValue() : -1;
             return new SkopeoResult(exitCode, stderrBuffer.toString(), !finished);
-        } catch (IOException e) {
-            // StartupChecks가 조기 검출하지만 기동 이후 경로가 사라지는 경우를 방어한다.
-            // 바이너리 누락은 재시도해도 소용없다 — 코드를 함께 실어 백오프를 건너뛰게 한다.
-            return new SkopeoResult(-1, e.getMessage(), false, ErrorCode.SKOPEO_NOT_EXECUTABLE);
         } catch (InterruptedException e) {
+            // invokeAll은 호출자가 인터럽트되면 형제 태스크를 cancel(true)로 끊는다(실측) —
+            // 여기서 안 죽이면 skopeo가 살아남아 지워질 tar에 계속 쓴다.
+            process.destroyForcibly();
             Thread.currentThread().interrupt();
             throw new IllegalStateException("다운로드 대기 중 인터럽트되었습니다.", e);
         }
