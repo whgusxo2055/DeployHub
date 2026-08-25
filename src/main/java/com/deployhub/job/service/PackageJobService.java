@@ -30,8 +30,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -43,9 +41,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @Transactional(readOnly = true)
 public class PackageJobService {
-
-    /** 감사 로그 ({@code PackageCleanupService}와 같은 로거를 공유한다). */
-    private static final Logger AUDIT = LoggerFactory.getLogger("audit");
 
     private final PackageJobRepository packageJobRepository;
     private final PackageItemRepository packageItemRepository;
@@ -102,7 +97,7 @@ public class PackageJobService {
 
         // package_job은 메인버전당 1건이라 force 재생성 시 이전 이력이 덮어써진다 —
         // 무엇을 확정했는지는 감사 로그에만 남는다.
-        AUDIT.info(
+        log.info(
                 "job-created versionName={} force={} imageTags={}", versionName, request.force(), targetTags);
 
         return toDetail(job, versionName);

@@ -13,8 +13,6 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,9 +30,6 @@ import org.springframework.util.FileSystemUtils;
 @Slf4j
 @Service
 public class PackagePurgeService {
-
-    /** 감사 로그. 삭제는 복구 불가라 실행 계기(trigger)를 반드시 남긴다. */
-    private static final Logger AUDIT = LoggerFactory.getLogger("audit");
 
     /**
      * 정리 가능한 종료 상태. 그 외는 진행 중이라 건드리지 않는다. DELETED가 빠지면 이미 정리된 Job의
@@ -105,7 +100,7 @@ public class PackagePurgeService {
             job.markDeleted();
         }
 
-        AUDIT.info(
+        log.info(
                 "package-purge versionName={} trigger={} spFolderId={} folderDeleted={} localDir={}",
                 versionName,
                 trigger,
@@ -143,7 +138,7 @@ public class PackagePurgeService {
             return LocalDir.ABSENT;
         }
         if (FileSystemUtils.deleteRecursively(dir.toFile())) {
-            AUDIT.info("local-purge versionName={} trigger={} dir={}", versionName, trigger, dir);
+            log.info("local-purge versionName={} trigger={} dir={}", versionName, trigger, dir);
             return LocalDir.DELETED;
         }
         // 다음 배치에서 다시 시도한다 — 조건(DONE + 유예 경과 + 디렉터리 존재)이 그대로라 자연히 재선정된다.

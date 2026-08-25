@@ -19,8 +19,6 @@ import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -34,9 +32,6 @@ import org.springframework.stereotype.Service;
 @Slf4j
 @Service
 public class PackageCleanupService {
-
-    /** 감사 로그. 대량 삭제 진입점이라 호출 자체를 남긴다. */
-    private static final Logger AUDIT = LoggerFactory.getLogger("audit");
 
     /**
      * SharePoint 정리 대상 상태. FAILED도 포함해야 한다 — 폴더 확보 후 실패한 Job의 폴더와
@@ -173,7 +168,7 @@ public class PackageCleanupService {
             }
         }
 
-        AUDIT.info(
+        log.info(
                 "cleanup-batch trigger={} dryRun={} local={} sharePoint={} failed={}",
                 trigger,
                 dryRun,
