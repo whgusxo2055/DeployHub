@@ -75,6 +75,7 @@
 - **주석·Swagger는 압축한다.** `@Operation`은 `summary` 1줄만 쓰고 `description`은 달지 않는다(예외 사유는 `@ApiResponse`가 이미 담는다). 주석·javadoc은 **2줄 이내**로, "왜"만 남기고 "무엇"은 코드가 말하게 한다. 3줄이 필요하면 그건 주석이 아니라 `DEFERRED.md` 항목이거나 테스트로 남길 것.
 - `version_name`은 로컬 작업 디렉터리명(`Path.of(workDir, versionName, "images")`)과 SharePoint 폴더명으로 그대로 쓰인다 — 등록 정규식은 형식 취향이 아니라 경로 이탈 방어이자 **정렬 전제**다(index 3자리 고정이라 PK 문자열 비교가 곧 배포 순서). 완화 금지. `image_tag` 쪽은 NCR REST 경로 주입만 막으면 되고 distribution 문법을 재현할 필요는 없다. tar 파일명은 `/`·`:`를 `_`로 치환할 뿐이라 단사가 아니다(`a/b:1` = `a_b:1`) — 그 충돌은 파일명이 아니라 확정 시점 검사(`assertTargetTagsValid`, E-0301)가 막는다.
 - 테이블 기본 대조가 `utf8mb4_0900_ai_ci`라 **자바 `equals`와 DB 행 선택 기준이 다르다** — `cc`/`CC`·전각·ZWSP가 자바 검증을 통과하고도 같은 행을 잡는다. V4에서 `image_tag` 두 컬럼만 `utf8mb4_bin`으로 옮겼고 `code`·`version_name`은 여전히 ai_ci다. 저장·비교에는 경로 문자열이 아니라 DB에서 얻은 정규값을 쓸 것(`SubVersionWriter`의 `canonical`).
+- Flyway는 마이그레이션 SQL의 `${...}`를 **주석 안에서도** 플레이스홀더로 치환한다 — 값이 없으면 `No value provided for placeholder`로 기동이 죽고, 통합 테스트가 컨텍스트 로딩 실패로 무더기 실패한다. SQL 주석에 환경변수 이름을 적을 땐 달러-중괄호를 쓰지 말 것.
 - 제약 위반을 `catch (DataIntegrityViolationException)`으로 잡으려면 `saveAndFlush`여야 한다 — `save`는 커밋 시점에 던져 catch 밖으로 샌다.
 - `@Component` 클래스에 테스트 주입용 보조 생성자(예: `RestClient.Builder` 파라미터)를 추가하면, 실제 사용할 생성자에 `@Autowired`를 명시할 것. 생성자가 2개 이상이면 Spring이 (package-private이어도) 선택을 못 하고 "No default constructor found"로 기동이 죽는다.
 - 외부 API 클라이언트를 테스트할 때는 `MockRestServiceServer.bindTo(RestClient.Builder)`를 그 보조 생성자에 주입하는 패턴을 쓴다 (`NcrRegistryClient`, `GraphTokenService` 참고).

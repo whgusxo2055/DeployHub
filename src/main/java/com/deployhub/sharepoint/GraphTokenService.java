@@ -36,6 +36,8 @@ import org.springframework.web.client.RestClientResponseException;
 public class GraphTokenService {
 
     private static final Duration EARLY_REFRESH = Duration.ofMinutes(5);
+    // SharePoint 전환 시: Files.ReadWrite는 로그인 계정 드라이브 전용이라 Files.ReadWrite.All(또는 Sites.ReadWrite.All)이 필요하다.
+    // scope가 바뀌면 저장된 refresh token이 무효라 device code 흐름을 다시 태워야 한다.
     private static final String SCOPE = "https://graph.microsoft.com/Files.ReadWrite offline_access";
 
     private final GraphProperties properties;

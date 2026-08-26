@@ -61,7 +61,9 @@ public class JobOrchestrator {
 
     /** 폴더 확보 + 업로드. */
     private void upload(String versionName) {
+        // 업로드 폴더를 확보한다.
         String folderItemId = graphFolderService.ensureFolder(versionName);
+        // 업로드를 시작한다 — GraphUploadService가 폴더 ID를 받아 바로 쓴다.
         graphUploadService.uploadAll(versionName, folderItemId);
     }
 }

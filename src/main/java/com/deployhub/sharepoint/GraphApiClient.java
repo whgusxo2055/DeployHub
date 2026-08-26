@@ -204,12 +204,19 @@ public class GraphApiClient {
         }
     }
 
-    /** 위임 인증이라 사이트가 아니라 로그인한 계정의 드라이브를 본다. */
+    /**
+     * 위임 인증이라 사이트가 아니라 로그인한 계정의 드라이브를 본다.
+     * SharePoint 전환 시: {@code /drives/{driveId}/root}로 바꿀 것 — 안 바꾸면 쓰지도 않는 드라이브를 보고 헬스가 계속 초록이다.
+     */
     public void healthCheck() {
         get("/me/drive/root");
     }
 
-    /** {@code SP_DRIVE_ID}가 없으면 로그인한 계정의 기본 드라이브를 조회해 메모리에 캐시한다. */
+    /**
+     * {@code SP_DRIVE_ID}가 없으면 로그인한 계정의 기본 드라이브를 조회해 메모리에 캐시한다.
+     * SharePoint 전환 시: {@code /me/drive} 폴백을 지우고 SP_DRIVE_ID를 필수로 둘 것(또는 siteId를 받아 {@code /sites/{id}/drive} 조회).
+     * 이 값만 사이트 문서 라이브러리 driveId로 바뀌면 폴더·업로드의 {@code /drives/{driveId}/…} 호출은 그대로 돈다.
+     */
     public String resolveDriveId() {
         if (properties.driveId() != null && !properties.driveId().isBlank()) {
             return properties.driveId();

@@ -40,6 +40,7 @@ public class GraphFolderService {
      * {@link GraphUploadService}가 바로 쓸 Drive Item ID를 반환한다.
      */
     public String ensureFolder(String versionName) {
+        // Graph 경로 addressing URL에 그대로 붙으므로 경로를 벗어나게 만드는 두 가지만 한 겹 더 본다.
         validateFolderName(versionName);
         String driveId = graphApiClient.resolveDriveId();
 
@@ -48,6 +49,7 @@ public class GraphFolderService {
                 .map(this::parseFolderItem)
                 .orElseGet(() -> createFolder(driveId, versionName));
 
+        // 생성한 폴더에 이전 확정본이 남아 있으면 업로드 충돌이 나므로 지운다.
         clearExistingChildren(driveId, folder.id());
         String linkUrl = createShareLink(driveId, folder.id()).orElseGet(() -> {
             log.warn("{} versionName={}", ErrorCode.SHARE_LINK_BLOCKED.toMessage(), versionName);

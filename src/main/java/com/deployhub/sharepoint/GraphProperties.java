@@ -15,6 +15,7 @@ import org.springframework.validation.annotation.Validated;
 public record GraphProperties(
         @NotBlank String tenantId,
         @NotBlank String clientId,
+        // SharePoint 전환 시: @NotBlank로 승격할 것 — /me/drive 폴백이 없어지면 미설정이 곧 기동 실패여야 한다.
         String driveId,
         @NotBlank String rootPath) {
 

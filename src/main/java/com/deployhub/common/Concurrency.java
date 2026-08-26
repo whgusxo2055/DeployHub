@@ -15,6 +15,11 @@ public final class Concurrency {
     /**
      * 전건 제출 — 동시성은 실행기의 고정 풀이 정하고 큐가 슬라이딩 윈도우다(배치로 나누면 느린
      * 항목이 다음 묶음을 막는다). {@code invokeAll}이 전건 완료 후 반환해 형제가 고아로 안 남는다.
+     * @param executor 실행기
+     * @param items 입력 항목
+     * @param mapper 항목별 매핑 함수
+     * @param <T> 입력 항목 타입
+     * @param <R> 출력 항목 타입
      */
     public static <T, R> List<R> mapAll(ExecutorService executor, List<T> items, Function<T, R> mapper) {
         List<Callable<R>> tasks =

@@ -84,12 +84,15 @@ public class GraphUploadService {
     }
 
     private boolean uploadItemWithRetry(PackageItem item, String driveId, String folderItemId) {
+        // 이미지 태그 파싱
         ImageReference ref;
         try {
             ref = ImageReference.parse(item.getImageTag());
         } catch (IllegalArgumentException e) {
             return failItem(item, ErrorCode.INVALID_IMAGE_TAG, e.getMessage());
         }
+
+        // tar 파일 경로와 크기 확인
         String fileName = ref.tarFileName();
         Path tarPath = Path.of(workDir, item.getVersionName(), "images", fileName);
         long fileSize;
@@ -99,6 +102,7 @@ public class GraphUploadService {
             return failItem(item, ErrorCode.UPLOAD_FILE_MISSING, e.getMessage());
         }
 
+        // 업로드 시도 루프 — 세션 소멸·권한 부족·토큰 발급 실패는 재시도해도 결과가 안 바뀌므로 바로 실패시킨다.
         int attempt = 0;
         while (true) {
             try {
@@ -153,10 +157,12 @@ public class GraphUploadService {
 
     /** 호출될 때마다 새 세션을 만든다 — 재시도가 이 메서드를 다시 부르는 것만으로 세션 재생성이 된다. */
     private String uploadFile(String driveId, String folderItemId, String fileName, Path tarPath, long fileSize) {
+        // 업로드 세션 생성
         String uploadUrl = createUploadSession(driveId, folderItemId, fileName);
         long offset = 0;
         long rangeMismatchBudget = MAX_RANGE_MISMATCH_RETRIES + fileSize / chunkSize + 1;
         long rangeMismatches = 0;
+
         try (RandomAccessFile file = new RandomAccessFile(tarPath.toFile(), "r")) {
             while (offset < fileSize) {
                 long end = Math.min(offset + chunkSize, fileSize) - 1;
