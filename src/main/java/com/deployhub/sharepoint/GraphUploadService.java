@@ -1,6 +1,7 @@
 package com.deployhub.sharepoint;
 
 import com.deployhub.common.ApiException;
+import com.deployhub.common.Concurrency;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
@@ -19,7 +20,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientResponseException;
@@ -44,6 +47,8 @@ public class GraphUploadService {
     private final ObjectMapper objectMapper;
     private final String workDir;
     private final long chunkSize;
+    // 동시 업로드 수는 이 풀의 고정 크기가 정한다 — 다운로드와 같은 패턴이다.
+    private final ExecutorService uploadExecutor;
 
     public GraphUploadService(
             PackageItemRepository packageItemRepository,
@@ -51,13 +56,15 @@ public class GraphUploadService {
             RetryProperties retryProperties,
             ObjectMapper objectMapper,
             @Value("${deployhub.work-dir}") String workDir,
-            @Value("${deployhub.upload.chunk-size:10485760}") long chunkSize) {
+            @Value("${deployhub.upload.chunk-size:62914560}") long chunkSize,
+            @Qualifier("uploadExecutor") ExecutorService uploadExecutor) {
         this.packageItemRepository = packageItemRepository;
         this.graphApiClient = graphApiClient;
         this.retryProperties = retryProperties;
         this.objectMapper = objectMapper;
         this.workDir = workDir;
         this.chunkSize = chunkSize;
+        this.uploadExecutor = uploadExecutor;
     }
 
     /**
@@ -72,13 +79,9 @@ public class GraphUploadService {
                         || item.getStatus() == PackageItemStatus.UPLOADED)
                 .toList();
 
-        boolean allSucceeded = true;
-        for (PackageItem item : targets) {
-            if (!uploadItemWithRetry(item, driveId, folderItemId)) {
-                allSucceeded = false;
-            }
-        }
-        if (!allSucceeded) {
+        List<Boolean> results = Concurrency.mapAll(
+                uploadExecutor, targets, item -> uploadItemWithRetry(item, driveId, folderItemId));
+        if (results.contains(Boolean.FALSE)) {
             throw new IllegalStateException("일부 항목 업로드에 실패했습니다.");
         }
     }

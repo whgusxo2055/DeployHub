@@ -19,7 +19,8 @@
 | `STARTUP_CHECKS_ENABLED` | `true` | 끄면 NCR 도달성·skopeo·tar 점검을 건너뛴다. 운영에서 끄지 말 것 |
 | `SWAGGER_ENABLED` | `true` | 운영에서는 끄거나 nginx로 내부 IP만 허용 |
 | `CORS_ALLOWED_ORIGINS` | — | 프론트엔드 **브라우저 주소창**의 오리진이다(이 백엔드 IP가 아니다). 스킴 필수, 포트 와일드카드는 `:[*]` |
-| `UPLOAD_CHUNK_SIZE` | `10485760` | 320 KiB의 양의 배수 + 60 MiB 이하만 허용. 아니면 기동 실패(E-1108) |
+| `UPLOAD_CHUNK_SIZE` | `62914560` | 320 KiB의 양의 배수 + 60 MiB 이하만 허용. 아니면 기동 실패(E-1108). 청크마다 응답을 기다리므로 작게 잡으면 왕복 유휴가 늘어난다 |
+| `UPLOAD_CONCURRENCY` | `3` | **서버 전체**의 동시 업로드 수. `DOWNLOAD_CONCURRENCY`와 같은 전역 풀이라 `JOB_CONCURRENCY`가 곱해지지 않는다 |
 | `JOB_CONCURRENCY` | `3` | 동시 Job 수. 큐(100)까지 차면 E-1502 |
 | `DOWNLOAD_CONCURRENCY` | `9` | **서버 전체**의 동시 skopeo 수 상한. Job별로 나누지 않아 Job 하나가 다 쓸 수 있다 |
 | `DB_POOL_SIZE` | `20` | Hikari 최대 커넥션. `DOWNLOAD_CONCURRENCY` + Job 스레드 + 폴링 API보다 커야 한다 — **동시성을 올리면 같이 올릴 것** |
@@ -137,6 +138,12 @@ curl -sS -o /dev/null -D - https://<host>/v2/
 확인할 것. 클라이언트 설정으로는 우회할 수 없다.
 
 ## 5. 알려진 제약
+
+- **업로드 in-flight 힙은 `UPLOAD_CONCURRENCY × UPLOAD_CHUNK_SIZE × 2.05`다.** 2.05배는 실측값으로,
+  `readChunk`의 `byte[]` 한 벌과 RestClient/JDK HttpClient의 전송 버퍼 한 벌이다(청크 크기·병렬도와 무관하게 일정).
+  기본값(3 × 60 MiB)이면 369 MiB, MaxHeap의 약 19%다. JVM에 `-Xmx`를 주지 않아 MaxHeap이 컨테이너 메모리의
+  1/4로 자동 결정되므로(7.9 GB 호스트에서 1,986 MiB), **호스트를 옮기거나 `mem_limit`을 넣으면 이 여유가 같이 바뀐다** —
+  60 MiB 청크 기준 `UPLOAD_CONCURRENCY`는 8을 넘기지 말 것.
 
 - **Job 이력은 메인버전당 1건이다.** `package_job`의 PK가 `version_name`이라 재생성 시
   이전 이력이 덮어써진다. 최소한의 흔적은 서비스 로그가 남긴다(`job-created`·`package-purge`·

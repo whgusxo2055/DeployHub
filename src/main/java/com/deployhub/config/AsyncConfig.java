@@ -48,6 +48,15 @@ public class AsyncConfig {
         return fixedPool(concurrency, "download-");
     }
 
+    /**
+     * 서버 전체의 동시 업로드 수 상한. 기본 3은 순차 업로드 시절의 실효 동시성과 같다(Job 3개 × 파일 1개).
+     * 올릴 때는 힙을 볼 것 — in-flight 힙이 청크 크기의 약 2.05배 × 이 값이다(실측).
+     */
+    @Bean(name = "uploadExecutor", destroyMethod = "shutdownNow")
+    public ExecutorService uploadExecutor(@Value("${deployhub.upload.concurrency:3}") int concurrency) {
+        return fixedPool(concurrency, "upload-");
+    }
+
     /** {@code shutdownNow}로 파괴한다 — 기본 추론값 {@code shutdown()}은 4GB 다운로드가 끝날 때까지 종료를 막는다. */
     private static ExecutorService fixedPool(int size, String threadNamePrefix) {
         AtomicInteger counter = new AtomicInteger();

@@ -95,10 +95,14 @@ deployhub:
 
   # 업로드. 320 KiB(327680)의 배수여야 한다 — 아니면 UploadChunkSizeValidator가 기동을 막는다.
   upload:
-    chunk-size: ${UPLOAD_CHUNK_SIZE:10485760}
+    # Graph 상한인 60 MiB로 잡는다 — 청크마다 응답을 기다리므로 왕복 횟수가 곧 유휴 시간이다
+    # (10 GB 파일 기준 1,020회 → 170회). in-flight 힙은 이 값의 약 2.05배 × concurrency다(실측).
+    chunk-size: ${UPLOAD_CHUNK_SIZE:62914560}
+    # 서버 전체의 동시 업로드 수. 기본 3은 순차 시절의 실효 동시성과 같다(Job 3개 × 파일 1개).
+    concurrency: ${UPLOAD_CONCURRENCY:3}
     # 청크 PUT·업로드 세션 조회 전용 타임아웃(단위 없으면 초). spring.http.client.read-timeout(10초)은
-    # JDK 클라이언트에서 바디 전송까지 포함한 요청 전체의 데드라인이라 10 MiB 청크에 그대로 쓰면
-    # 지속 8.4 Mbps 미만에서 무조건 끊긴다. 300초면 하한이 약 0.27 Mbps가 된다.
+    # JDK 클라이언트에서 바디 전송까지 포함한 요청 전체의 데드라인이라 60 MiB 청크에 그대로 쓰면
+    # 지속 50 Mbps 미만에서 무조건 끊긴다. 300초면 하한이 약 1.7 Mbps가 된다.
     request-timeout: ${UPLOAD_REQUEST_TIMEOUT:300s}
 
   # 보존·정리 배치. days/count는 SharePoint 폴더에, local-cleanup-delay-hours는

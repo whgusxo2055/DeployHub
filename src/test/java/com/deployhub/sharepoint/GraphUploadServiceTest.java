@@ -27,6 +27,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -53,6 +56,14 @@ class GraphUploadServiceTest {
     private PackageItemRepository packageItemRepository;
     private String fileName;
 
+    private static final ExecutorService uploadExecutor = Executors.newSingleThreadExecutor();
+
+    @AfterAll
+    static void 실행기_종료() {
+        uploadExecutor.shutdownNow();
+    }
+
+    // 풀 크기 1이다 — MockRestServiceServer는 요청 순서를 고정해 검증하므로 병렬로 돌리면 단언이 깨진다.
     private GraphUploadService newService(long chunkSize) {
         RestClient.Builder builder = RestClient.builder();
         server = MockRestServiceServer.bindTo(builder).build();
@@ -65,7 +76,7 @@ class GraphUploadServiceTest {
                 new GraphApiClient(PROPERTIES, tokenService, retryExecutor, new ObjectMapper(), builder, builder);
         return new GraphUploadService(
                 packageItemRepository, graphApiClient, new RetryProperties(2, List.of(Duration.ofMillis(1))),
-                new ObjectMapper(), workDir.toString(), chunkSize);
+                new ObjectMapper(), workDir.toString(), chunkSize, uploadExecutor);
     }
 
     @BeforeEach
