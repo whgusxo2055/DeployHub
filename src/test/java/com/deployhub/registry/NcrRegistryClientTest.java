@@ -14,6 +14,7 @@ import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.net.ConnectException;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
@@ -65,6 +66,19 @@ class NcrRegistryClientTest {
 
         client.healthCheck();
         server.verify();
+    }
+
+    /** 연결 자체가 안 되는 건 "시간 초과"(E-0402)가 아니다 — 사내망 차단 진단이 여기서 갈린다. */
+    @Test
+    void 연결하지_못하면_헬스체크가_E_0404로_실패한다() {
+        server.expect(requestTo("https://ncr.example.com/v2/")).andRespond(request -> {
+            throw new ConnectException("Connection refused");
+        });
+
+        assertThatThrownBy(() -> client.healthCheck())
+                .isInstanceOf(ApiException.class)
+                .extracting(e -> ((ApiException) e).getErrorCode())
+                .isEqualTo(ErrorCode.REGISTRY_UNREACHABLE);
     }
 
     /**

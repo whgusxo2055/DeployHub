@@ -11,6 +11,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -387,9 +388,17 @@ public class NcrRegistryClient {
         return ex; // 404 등은 호출자가 자기 맥락으로 다시 분류한다.
     }
 
+    /**
+     * {@code ResourceAccessException}은 응답 지연과 연결 실패를 함께 싼다 — 원인으로 갈라야
+     * 사내망 TLS 차단·DNS 실패가 "시간 초과"(E-0402)로 둔갑하지 않는다.
+     */
     private RetryableCallException timeoutRetryable(String path, ResourceAccessException ex) {
-        log.warn("NCR 호출 시간 초과: {} ({})", path, ex.getMessage());
-        return new RetryableCallException(new ApiException(ErrorCode.REGISTRY_TIMEOUT));
+        // JDK 클라이언트는 연결·응답 지연 모두 HttpTimeoutException을 준다(실측). 연결 거부·DNS 실패는
+        // ConnectException, 사내망 TLS 차단은 SSLException이라 전부 "연결 불가"로 떨어진다.
+        boolean timedOut = ex.getCause() instanceof HttpTimeoutException;
+        log.warn("NCR 호출 실패({}): {} ({})", timedOut ? "시간 초과" : "연결 불가", path, ex.getMessage());
+        return new RetryableCallException(
+                new ApiException(timedOut ? ErrorCode.REGISTRY_TIMEOUT : ErrorCode.REGISTRY_UNREACHABLE));
     }
 
     /**
