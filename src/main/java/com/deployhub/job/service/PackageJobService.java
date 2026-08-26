@@ -24,6 +24,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLIntegrityConstraintViolationException;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -67,38 +68,30 @@ public class PackageJobService {
     /** 매니페스트 확정. 순서 고정 — 찌꺼기 행을 남기지 않도록 검증을 전부 마친 뒤에야 package_item을 재생성한다. */
     @Transactional
     public PackageJobDetailResponse create(String versionName, PackageJobCreateRequest request) {
-        // 서브버전 upsert(SubVersionWriter)와 같은 행을 잡는다 — 없으면 두 트랜잭션이 각자
-        // 검사를 통과해, 확정된 package_item과 DB 컴포넌트가 어긋난 채 패키징이 돈다.
+        // 서브버전 upsert(SubVersionWriter)와 같은 행을 잡아 "컴포넌트 수정"과 "매니페스트 확정"을
+        // 직렬화한다. 존재 확인도 겸한다 — 락 없는 findById면 동시 생성 두 건이 둘 다 INSERT를 시도한다.
         mainVersionRepository
                 .lockByVersionName(versionName)
                 .orElseThrow(() ->
                         new ApiException(ErrorCode.MAIN_VERSION_NOT_FOUND, List.of("versionName=" + versionName)));
 
-        PackagingEligibility eligibility = packagingEligibilityService.evaluate(versionName);
-        if (!eligibility.eligible()) {
-            throw new ApiException(
-                    ErrorCode.PACKAGING_BLOCKED_BY_PENDING, eligibility.blockingSubVersionCodes());
-        }
-
-        // 대상은 요청이 명시한 태그가 전부다(@NotEmpty로 빈 목록은 이미 걸린다).
         List<String> targetTags = request.imageTags();
-        assertTargetTagsValid(versionName, targetTags);
 
-        PackageJob job = resolveJob(versionName, request.force());
+        // 서브버전 상태가 PENDING이면 패키징을 막는다
+        assertCreatable(versionName, targetTags);
 
+        // Job이 이미 존재하면 진행 중·완료 상태라 덮어쓰지 못한다 — DELETED·FAILED만 되돌릴 수 있다.
+        PackageJob job = resolveJob(versionName);
+
+        // 기존 항목을 모두 지우고 새로 생성한다 — 실패한 항목이 남아 있으면 재시도에서 tar를 재사용할 수 없으므로
         packageItemRepository.deleteByVersionName(versionName);
-        // Hibernate는 같은 트랜잭션 내 INSERT를 DELETE보다 먼저 플러시한다 — 같은 image_tag를
-        // 다시 쓰면 PK 충돌이 나므로 먼저 비운다.
         packageItemRepository.flush();
+
         for (String tag : targetTags) {
-            packageItemRepository.save(
-                    PackageItem.builder().versionName(versionName).imageTag(tag).build());
+            packageItemRepository.save(PackageItem.builder().versionName(versionName).imageTag(tag).build());
         }
 
-        // package_job은 메인버전당 1건이라 force 재생성 시 이전 이력이 덮어써진다 —
-        // 무엇을 확정했는지는 감사 로그에만 남는다.
-        log.info(
-                "job-created versionName={} force={} imageTags={}", versionName, request.force(), targetTags);
+        log.info("job-created versionName={} imageTags={}", versionName, targetTags);
 
         return toDetail(job, versionName);
     }
@@ -145,7 +138,6 @@ public class PackageJobService {
     /**
      * 수동 재시도. {@code imageTags}가 비면 FAILED 전체가 대상이고, DOWNLOADED/UPLOADED는 지정해도 제외된다.
      * 되돌릴 FAILED가 없어도 태그 미지정이면 단계 재개만 시킨다(Job 단위 실패 복구).
-     * 작업 디렉터리가 소실됐으면 {@code force=true}일 때만 전 항목을 되돌린다.
      * 업로드 단계에서 죽은 항목은 받아 둔 tar가 그대로면 DOWNLOADED로 되돌려 재수집을 건너뛴다.
      * 재개는 이 트랜잭션이 커밋된 뒤 컨트롤러가 {@link JobOrchestrator#startValidated}로 호출한다.
      */
@@ -160,16 +152,15 @@ public class PackageJobService {
 
         List<PackageItem> allItems = packageItemRepository.findByVersionNameOrderByImageTagAsc(versionName);
         // 작업 디렉터리는 다운로드가 시작될 때 만들어진다 — VALIDATING에서 죽은 Job은 애초에 없으므로
-        // 부재를 "소실"로 보면 실패 원인과 무관한 E-0703이 나가고 force를 요구하게 된다.
+        // 부재를 "소실"로 보면 실패 원인과 무관한 E-0703이 나간다.
         boolean expectsTars = allItems.stream()
                 .anyMatch(item -> item.getStatus() == PackageItemStatus.DOWNLOADED
                         || item.getStatus() == PackageItemStatus.UPLOADED);
-        boolean workDirLost = expectsTars && !Files.isDirectory(Path.of(workDir, versionName, "images"));
-        if (workDirLost && !request.force()) {
+        if (expectsTars && !Files.isDirectory(Path.of(workDir, versionName, "images"))) {
             throw new ApiException(ErrorCode.WORK_DIR_LOST);
         }
 
-        List<PackageItem> targets = resolveRetryTargets(allItems, request, workDirLost);
+        List<PackageItem> targets = resolveRetryTargets(allItems, request);
         // 되돌릴 항목이 없어도 태그를 지정하지 않은 요청은 통과시킨다 — 항목은 전부 성공했는데
         // Job 단위 실패(폴더 확보 실패 등)로 FAILED가 된 경우가 있고, 여기서 막으면 그 Job은
         // 영구 좌초한다(FAILED라 상태 전이도 못 하고 재시도도 못 한다). 재개가 다운로드·업로드를
@@ -180,8 +171,6 @@ public class PackageJobService {
         }
 
         for (PackageItem item : targets) {
-            // 상태까지 봐야 한다 — workDirLost 경로는 DOWNLOADED/UPLOADED도 targets에 넣는데,
-            // 그건 force가 명시한 전건 재수집이라 살려내면 안 된다.
             Long downloadedSize = item.isFailedAfterDownload() ? item.getFileSize() : null;
             item.resetForRetry();
             if (downloadedSize != null && localTarMatches(versionName, item, downloadedSize)) {
@@ -212,10 +201,7 @@ public class PackageJobService {
         }
     }
 
-    private List<PackageItem> resolveRetryTargets(List<PackageItem> allItems, PackageItemRetryRequest request, boolean workDirLost) {
-        if (workDirLost) {
-            return allItems; // force=true로만 여기 온다 — 전건 재수집
-        }
+    private List<PackageItem> resolveRetryTargets(List<PackageItem> allItems, PackageItemRetryRequest request) {
         if (request.imageTags() == null || request.imageTags().isEmpty()) {
             return allItems.stream().filter(item -> item.getStatus() == PackageItemStatus.FAILED).toList();
         }
@@ -243,25 +229,36 @@ public class PackageJobService {
                 .toList();
     }
 
-    private void assertTargetTagsValid(String versionName, List<String> targetTags) {
-        Set<String> unique = new HashSet<>(targetTags);
-        if (unique.size() != targetTags.size()) {
-            throw new ApiException(ErrorCode.INVALID_IMAGE_TAG_SELECTION, List.of("duplicated"));
+    private void assertCreatable(String versionName, List<String> targetTags) {
+        //SubVersions의 상태가 PENDING이면 패키징을 막는다.
+        PackagingEligibility eligibility = packagingEligibilityService.evaluate(versionName);
+        if (!eligibility.eligible()) {
+            throw new ApiException(ErrorCode.PACKAGING_BLOCKED_BY_PENDING, eligibility.blockingSubVersionCodes());
         }
 
-        Set<String> fileNames = new HashSet<>();
+        assertTargetTagsValid(versionName, targetTags);
+    }
+    /** 주어진 태그들이 유효한지 검증한다. */
+    private void assertTargetTagsValid(String versionName, List<String> targetTags) {
+        Map<String, String> tagByFileName = new HashMap<>();
         for (String tag : targetTags) {
+            String fileName;
             try {
-                if (!fileNames.add(ImageReference.parse(tag).tarFileName())) {
-                    throw new ApiException(ErrorCode.INVALID_IMAGE_TAG_SELECTION, List.of("fileNameCollision", tag));
-                }
+                fileName = ImageReference.parse(tag).tarFileName();
             } catch (IllegalArgumentException e) {
-                // 예외 메시지에는 원문이 들어 있다 — 로그로만 남기고 응답에는 태그만 싣는다.
                 log.warn("확정 대상 image_tag 형식 오류: versionName={}, reason={}", versionName, e.getMessage());
                 throw new ApiException(ErrorCode.INVALID_IMAGE_TAG_SELECTION, List.of(tag));
             }
-        }
 
+            //파일명 중복 검증
+            String previous = tagByFileName.putIfAbsent(fileName, tag);
+            if (previous != null) {
+                throw new ApiException(
+                        ErrorCode.INVALID_IMAGE_TAG_SELECTION,
+                        List.of(previous.equals(tag) ? "duplicated" : "fileNameCollision", tag));
+            }
+        }
+        // 메인버전의 Component에 등록된 태그만 허용한다 — 레지스트리 확인은 Job이 커밋된 뒤 워커가 한다.
         Set<String> validTags = componentRepository.findByMainVersionName(versionName).stream()
                 .map(Component::getImageTag)
                 .collect(Collectors.toSet());
@@ -275,12 +272,13 @@ public class PackageJobService {
 
     /**
      * 중복 확인. 행이 없으면 신규 생성하고, 있으면 락을 잡고 재사용 가능 여부를 판정한다 —
-     * DONE은 force일 때만, FAILED와 DELETED는 항상, 진행 중 상태는 force로도 안 뚫린다.
+     * 되돌릴 수 있는 건 FAILED와 DELETED뿐이다. 완료된 Job은 패키지를 정리(DELETED)한 뒤 다시 만든다.
      *
      * <p>존재 확인은 반드시 {@code existsById}로 할 것 — {@code findById}를 쓰면 엔티티가 1차 캐시에
      * 올라가 뒤따르는 {@code FOR UPDATE}가 stale 인스턴스를 돌려줘 락이 무력화된다.
      */
-    private PackageJob resolveJob(String versionName, boolean force) {
+    private PackageJob resolveJob(String versionName) {
+        // 존재하지 않으면 신규 생성 — 충돌은 PK 유니크 위반으로 잡는다.
         if (!packageJobRepository.existsById(versionName)) {
             try {
                 return packageJobRepository.saveAndFlush(
@@ -290,17 +288,18 @@ public class PackageJobService {
             }
         }
 
+        // 존재하면 락을 잡고 재사용 가능 여부를 판정한다 — DELETED·FAILED만 되돌릴 수 있다.
         PackageJob existing = packageJobRepository
                 .findByVersionName(versionName)
                 .orElseThrow(() -> new ApiException(ErrorCode.JOB_CREATION_CONFLICT));
 
-        boolean blocked =
-                switch (existing.getStatus()) {
-                    case DONE -> !force;
-                    // 정리된 Job은 내려받을 산출물이 없어 덮어쓸 것도 없다(DELETED는 DONE·FAILED 양쪽에서 온다).
-                    case DELETED, FAILED -> false;
-                    default -> true; // 진행 중 — force로도 안 뚫림
-                };
+        // 정리된 Job은 내려받을 산출물이 없어 덮어쓸 것도 없다.
+        boolean blocked = switch (existing.getStatus()) {
+            case DELETED, FAILED -> false;
+            default -> true; // DONE·진행 중 — 살아 있는 산출물을 덮어쓰지 않는다
+        };
+
+        // Job이 살아 있으면 폴더가 이미 확보돼 있어 덮어쓰면 안 된다
         if (blocked) {
             throw new ApiException(
                     ErrorCode.DUPLICATE_PACKAGE_JOB,

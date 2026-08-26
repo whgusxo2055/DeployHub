@@ -324,7 +324,7 @@ class PackageCleanupApiFlowIntegrationTest extends MySqlContainerSupport {
 
     /**
      * 대상 선정은 배치 진입 시 뜬 스냅샷이라, 건별 삭제가 도는 동안 같은 메인버전이
-     * {@code force=true}나 {@code /retry}로 다시 돌아 <b>완료까지 갈</b> 수 있다. 그때도 상태는
+     * 재생성이나 {@code /retry}로 다시 돌아 <b>완료까지 갈</b> 수 있다. 그때도 상태는
      * DONE이라 상태 검사만으로는 통과해 방금 만들어진 폴더·디렉터리를 지운다 —
      * {@code finished_at}이 그대로인지까지 봐야 잡힌다.
      */

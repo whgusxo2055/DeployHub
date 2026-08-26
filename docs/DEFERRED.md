@@ -109,7 +109,7 @@ SharePoint 폴더 비우기가 일어난다. 종전에는 `NO_PACKAGING_TARGET`�
 수용 가능으로 판정했다. 무한 루프는 성립하지 않는다 — 재업로드가 성공하면 `finish()`가 DONE으로
 끝내 더는 retry가 안 되고, 도중 실패하면 항목이 FAILED가 돼 기존 경로로 돌아간다.
 
-**그때 할 일** — 조인다면 이 분기에만 `force=true`를 요구하는 게 가장 싼 가드다.
+**그때 할 일** — 조인다면 이 분기에만 별도 확인 플래그를 요구하는 게 가장 싼 가드다.
 
 ---
 
@@ -240,8 +240,8 @@ E-0206으로 중단되고 `details`에 없는 태그 목록이 실린다 → 부
 
 **그때 할 일** — Sites 전환 뒤에도 락 유지가 문제되면(Graph 5xx·수 GB 재귀 삭제) 삭제를 락 밖으로
 빼고 트랜잭션은 재확인 + `deleted_at` 기록만 남긴다. 단 **락을 놓으면 새 경합이 생긴다** —
-`PackageJobService.resolveJob`이 `deleted_at`이 찍힌 DONE Job과 FAILED Job의 재실행을 막지 않으므로,
-삭제가 도는 사이 `force` 재실행이 끼어들면 방금 만들어진 폴더를 지울 수 있다. 사후 감지는
+`PackageJobService.resolveJob`이 DELETED·FAILED Job의 재실행을 막지 않으므로,
+삭제가 도는 사이 재실행이 끼어들면 방금 만들어진 폴더를 지울 수 있다. 사후 감지는
 `finished_at` 비교로 되지만 삭제 자체는 이미 일어난 뒤다. 한 번 구현했다가 이 맞바꿈 때문에
 되돌렸다.
 

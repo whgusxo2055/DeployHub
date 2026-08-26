@@ -370,17 +370,45 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
 
         ResponseEntity<String> created = restTemplate.postForEntity(
                 "/api/main-versions/{versionName}/package-job",
-                new PackageJobCreateRequest(List.of(missingTag), false),
+                new PackageJobCreateRequest(List.of(missingTag)),
                 String.class,
                 versionName);
 
         assertThat(created.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(created.getBody()).contains("E-0308").contains(missingTag);
 
-        // 사유는 항목에도 남아 화면이 어느 태그가 문제인지 보여줄 수 있어야 한다.
-        PackageJobDetailResponse polled = getJob(versionName).getBody();
-        assertThat(polled.job().status()).isEqualTo("FAILED");
-        assertThat(polled.items().get(0).errorMessage()).contains("E-0501");
+        // 거절된 요청은 아무것도 남기지 않는다 — 행이 남으면 재생성이 그 Job을 덮어쓰는 것으로 바뀐다.
+        assertThat(getJobRaw(versionName).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    /** 직전 Job이 있는데 태그가 잘못된 재생성도 마찬가지다 — 400이면 그 Job은 그대로여야 한다. */
+    @Test
+    void 생성이_거절되면_직전_Job의_이력이_남는다() {
+        String versionName = "2026.20.03.001";
+        String missingTag = TEST_REPOSITORY + ":does-not-exist";
+        registerMainVersion(versionName);
+        registerAndSubmitSubVersion(versionName, "test", "1.0.0", List.of(missingTag));
+        jdbcTemplate.update(
+                "INSERT INTO package_job (version_name, status, sp_folder_url) VALUES (?, 'FAILED', ?)",
+                versionName,
+                "https://contoso.sharepoint.com/prev");
+        jdbcTemplate.update(
+                "INSERT INTO package_item (version_name, image_tag, status, error_message) "
+                        + "VALUES (?, ?, 'FAILED', 'E-0601: 이전 실패')",
+                versionName,
+                missingTag);
+
+        ResponseEntity<String> created = restTemplate.postForEntity(
+                "/api/main-versions/{versionName}/package-job",
+                new PackageJobCreateRequest(List.of(missingTag)),
+                String.class,
+                versionName);
+
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        PackageJobDetailResponse previous = getJob(versionName).getBody();
+        assertThat(previous.job().status()).isEqualTo("FAILED");
+        assertThat(previous.job().spFolderUrl()).isEqualTo("https://contoso.sharepoint.com/prev");
+        assertThat(previous.items().get(0).errorMessage()).isEqualTo("E-0601: 이전 실패");
     }
 
     /** 재시도도 같은 판정을 써야 한다 — 갈라지면 같은 오타가 생성은 400, 재시도는 200이 된다. */
@@ -390,16 +418,24 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         String missingTag = TEST_REPOSITORY + ":does-not-exist";
         registerMainVersion(versionName);
         registerAndSubmitSubVersion(versionName, "test", "1.0.0", List.of(missingTag));
-        createPackageJob(versionName, List.of(missingTag)); // 생성에서 이미 FAILED로 떨어진다
+        // 생성은 이제 행을 남기지 않으므로, "확정 당시엔 있었는데 그 사이 지워진" 상태를 직접 심는다.
+        jdbcTemplate.update(
+                "INSERT INTO package_job (version_name, status) VALUES (?, 'FAILED')", versionName);
+        jdbcTemplate.update(
+                "INSERT INTO package_item (version_name, image_tag, status) VALUES (?, ?, 'FAILED')",
+                versionName,
+                missingTag);
 
         ResponseEntity<String> retried = restTemplate.postForEntity(
                 "/api/package-jobs/{versionName}/retry",
-                new PackageItemRetryRequest(List.of(missingTag), false),
+                new PackageItemRetryRequest(List.of(missingTag)),
                 String.class,
                 versionName);
 
         assertThat(retried.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(retried.getBody()).contains("E-0308");
+        // 재시도는 생성과 달리 사유를 항목에 남긴다 — 거절 대상이 입력이 아니라 저장된 상태다.
+        assertThat(getJob(versionName).getBody().items().get(0).errorMessage()).contains("E-0501");
     }
 
     @Test
@@ -421,7 +457,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
 
         ResponseEntity<PackageJobDetailResponse> retried = restTemplate.postForEntity(
                 "/api/package-jobs/{versionName}/retry",
-                new PackageItemRetryRequest(null, false),
+                new PackageItemRetryRequest(null),
                 PackageJobDetailResponse.class,
                 versionName);
 
@@ -445,7 +481,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
 
         ResponseEntity<String> response = restTemplate.postForEntity(
                 "/api/package-jobs/{versionName}/retry",
-                new PackageItemRetryRequest(null, false),
+                new PackageItemRetryRequest(null),
                 String.class,
                 versionName);
 
@@ -454,13 +490,13 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
     }
 
     @Test
-    void 작업_디렉터리가_없으면_force_없이는_재시도가_거부된다() {
+    void 작업_디렉터리가_소실되면_재시도가_거부된다() {
         String versionName = "2026.20.05.001";
         registerMainVersion(versionName);
         jdbcTemplate.update(
                 "INSERT INTO package_job (version_name, status) VALUES (?, 'FAILED')", versionName);
         // DOWNLOADED여야 "받아 둔 tar가 있었는데 사라졌다"가 된다 — FAILED뿐이면 애초에 받은 적이
-        // 없는 상태라(VALIDATING 실패 등) 소실이 아니고, 그건 force 없이 재시도돼야 한다.
+        // 없는 상태라(VALIDATING 실패 등) 소실이 아니고, 그건 그대로 재시도돼야 한다.
         jdbcTemplate.update(
                 "INSERT INTO package_item (version_name, image_tag, status) VALUES (?, ?, 'DOWNLOADED')",
                 versionName,
@@ -469,7 +505,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
 
         ResponseEntity<String> response = restTemplate.postForEntity(
                 "/api/package-jobs/{versionName}/retry",
-                new PackageItemRetryRequest(null, false),
+                new PackageItemRetryRequest(null),
                 String.class,
                 versionName);
 
@@ -497,9 +533,13 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
     private ResponseEntity<PackageJobDetailResponse> createPackageJob(String versionName, List<String> imageTags) {
         return restTemplate.postForEntity(
                 "/api/main-versions/{versionName}/package-job",
-                new PackageJobCreateRequest(imageTags, false),
+                new PackageJobCreateRequest(imageTags),
                 PackageJobDetailResponse.class,
                 versionName);
+    }
+
+    private ResponseEntity<String> getJobRaw(String versionName) {
+        return restTemplate.getForEntity("/api/package-jobs/{versionName}", String.class, versionName);
     }
 
     private ResponseEntity<PackageJobDetailResponse> getJob(String versionName) {

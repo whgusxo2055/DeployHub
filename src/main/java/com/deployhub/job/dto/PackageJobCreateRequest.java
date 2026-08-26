@@ -14,9 +14,7 @@ import java.util.List;
  */
 public record PackageJobCreateRequest(
         @NotEmpty @Size(max = 500) @Schema(description = "패키징 대상 image_tag 목록 (필수). 메인버전에 등록된 컴포넌트여야 한다")
-        List<@NotBlank @Size(max = 200) String> imageTags,
-        @Schema(description = "true면 완료된(DONE) Job을 초기화해 재생성한다. 진행 중인 Job은 force로도 뚫지 않는다")
-        boolean force)
+        List<@NotBlank @Size(max = 200) String> imageTags)
         implements ValidatedRequest {
 
     @Override

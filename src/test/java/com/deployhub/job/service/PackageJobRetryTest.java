@@ -65,7 +65,7 @@ class PackageJobRetryTest {
         when(packageItemRepository.findByVersionNameOrderByImageTagAsc(VERSION_NAME))
                 .thenReturn(List.of(downloaded));
 
-        assertThatCode(() -> service().retry(VERSION_NAME, new PackageItemRetryRequest(List.of(), false)))
+        assertThatCode(() -> service().retry(VERSION_NAME, new PackageItemRetryRequest(List.of())))
                 .doesNotThrowAnyException();
 
         assertThat(job.getStatus()).isEqualTo(JobStatus.DOWNLOADING);
@@ -106,15 +106,15 @@ class PackageJobRetryTest {
     }
 
     @Test
-    void 다운로드를_시작한_적_없는_Job은_작업_디렉터리가_없어도_force_없이_재시도된다() {
+    void 다운로드를_시작한_적_없는_Job은_작업_디렉터리가_없어도_재시도된다() {
         // images 디렉터리는 다운로드가 시작될 때 만들어진다 — VALIDATING에서 죽으면 애초에 없다.
-        // 그 부재를 "소실"로 보면 실패 원인과 무관한 E-0703이 나가고 force를 요구하게 된다.
+        // 그 부재를 "소실"로 보면 실패 원인과 무관한 E-0703이 나간다.
         PackageJob job = PackageJob.builder().versionName(VERSION_NAME).status(JobStatus.FAILED).build();
         PackageItem failed = newItem("acme/a:1.0", PackageItemStatus.FAILED);
         when(packageJobRepository.lockOrThrow(VERSION_NAME)).thenReturn(job);
         when(packageItemRepository.findByVersionNameOrderByImageTagAsc(VERSION_NAME)).thenReturn(List.of(failed));
 
-        service().retry(VERSION_NAME, new PackageItemRetryRequest(null, false));
+        service().retry(VERSION_NAME, new PackageItemRetryRequest(null));
 
         assertThat(job.getStatus()).isEqualTo(JobStatus.DOWNLOADING);
         assertThat(failed.getStatus()).isEqualTo(PackageItemStatus.PENDING);
@@ -134,7 +134,7 @@ class PackageJobRetryTest {
         when(packageItemRepository.findByVersionNameOrderByImageTagAsc(VERSION_NAME))
                 .thenReturn(List.of(uploadFailed));
 
-        service().retry(VERSION_NAME, new PackageItemRetryRequest(null, false));
+        service().retry(VERSION_NAME, new PackageItemRetryRequest(null));
 
         assertThat(uploadFailed.getStatus()).isEqualTo(PackageItemStatus.DOWNLOADED);
         assertThat(uploadFailed.getFileSize()).isEqualTo(7L);
@@ -154,7 +154,7 @@ class PackageJobRetryTest {
         when(packageItemRepository.findByVersionNameOrderByImageTagAsc(VERSION_NAME))
                 .thenReturn(List.of(uploadFailed));
 
-        service().retry(VERSION_NAME, new PackageItemRetryRequest(null, false));
+        service().retry(VERSION_NAME, new PackageItemRetryRequest(null));
 
         assertThat(uploadFailed.getStatus()).isEqualTo(PackageItemStatus.PENDING);
         assertThat(uploadFailed.getFileSize()).isNull();
@@ -177,7 +177,7 @@ class PackageJobRetryTest {
         when(packageItemRepository.findByVersionNameOrderByImageTagAsc(VERSION_NAME))
                 .thenReturn(List.of(intact, truncated, downloadFailed));
 
-        service().retry(VERSION_NAME, new PackageItemRetryRequest(null, false));
+        service().retry(VERSION_NAME, new PackageItemRetryRequest(null));
 
         assertThat(intact.getStatus()).isEqualTo(PackageItemStatus.DOWNLOADED);
         assertThat(truncated.getStatus()).isEqualTo(PackageItemStatus.PENDING);

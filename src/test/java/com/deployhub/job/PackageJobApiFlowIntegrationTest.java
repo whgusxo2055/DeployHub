@@ -86,7 +86,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
 
         // 대상은 요청이 준 목록뿐이다 — 지정하지 않은 pips:1.0.0이 딸려 들어가면 안 된다.
         ResponseEntity<PackageJobDetailResponse> created =
-                createPackageJob("2026.10.02.001", List.of("api:2.0.0"), false);
+                createPackageJob("2026.10.02.001", List.of("api:2.0.0"));
         assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(created.getBody().items()).extracting(PackageItemResponse::imageTag).containsExactly("api:2.0.0");
 
@@ -114,7 +114,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
 
         // 선택 범위는 메인버전의 전체 컴포넌트다 — 직전 버전과 동일한 미변경분만 골라도 통과해야 한다.
         ResponseEntity<PackageJobDetailResponse> created =
-                createPackageJob("2026.10.42.001", List.of("pips:1.0.0"), false);
+                createPackageJob("2026.10.42.001", List.of("pips:1.0.0"));
 
         assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(created.getBody().items())
@@ -128,9 +128,9 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         registerAndSubmitSubVersion("2026.10.11.001", "pips", "1.0.0", null);
 
         // imageTags는 필수다 — 변경분으로 대신 채워 주지 않는다.
-        assertThat(createPackageJobRaw("2026.10.11.001", null, false).getStatusCode())
+        assertThat(createPackageJobRaw("2026.10.11.001", null).getStatusCode())
                 .isEqualTo(HttpStatus.BAD_REQUEST);
-        ResponseEntity<String> empty = createPackageJobRaw("2026.10.11.001", List.of(), false);
+        ResponseEntity<String> empty = createPackageJobRaw("2026.10.11.001", List.of());
         assertThat(empty.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(empty.getBody()).contains("E-0301");
         assertThat(jdbcTemplate.queryForObject(
@@ -144,7 +144,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         // registerAndSubmitSubVersion을 쓰지 않고 PENDING으로 등록해 확인 대기 상태를 만든다.
         putSubVersion("2026.10.21.001", new SubVersionUpsertRequest("pips", "1.0.0", null, 1, SubmitStatus.PENDING, null));
 
-        ResponseEntity<String> response = createPackageJobRaw("2026.10.21.001", List.of("pips:1.0.0"), false);
+        ResponseEntity<String> response = createPackageJobRaw("2026.10.21.001", List.of("pips:1.0.0"));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(response.getBody()).contains("E-0305");
@@ -156,14 +156,15 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         registerAndSubmitSubVersion("2026.10.31.001", "pips", "1.0.0", null);
 
         ResponseEntity<String> unknownTag =
-                createPackageJobRaw("2026.10.31.001", List.of("not-exist:1.0"), false);
+                createPackageJobRaw("2026.10.31.001", List.of("not-exist:1.0"));
         assertThat(unknownTag.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(unknownTag.getBody()).contains("E-0301");
 
         ResponseEntity<String> duplicateTag =
-                createPackageJobRaw("2026.10.31.001", List.of("pips:1.0.0", "pips:1.0.0"), false);
+                createPackageJobRaw("2026.10.31.001", List.of("pips:1.0.0", "pips:1.0.0"));
         assertThat(duplicateTag.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(duplicateTag.getBody()).contains("E-0301");
+        // 파일명 충돌과 사유가 갈려야 한다 — 고칠 방법이 "하나 지워라"와 "이미지 이름을 바꿔라"로 다르다.
+        assertThat(duplicateTag.getBody()).contains("E-0301").contains("duplicated");
     }
 
     @Test
@@ -174,10 +175,10 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         registerMainVersion("2026.10.33.001");
         registerAndSubmitSubVersion("2026.10.33.001", "dup", "1.0.0", List.of("a/b:1", "a_b:1"));
 
-        ResponseEntity<String> collided = createPackageJobRaw("2026.10.33.001", List.of("a/b:1", "a_b:1"), false);
+        ResponseEntity<String> collided = createPackageJobRaw("2026.10.33.001", List.of("a/b:1", "a_b:1"));
 
         assertThat(collided.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(collided.getBody()).contains("E-0301");
+        assertThat(collided.getBody()).contains("E-0301").contains("fileNameCollision");
     }
 
     @Test
@@ -186,7 +187,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         registerAndSubmitSubVersion("2026.11.01.001", "pips", "1.0.0", null);
         insertPackageJob("2026.11.01.001", "DONE", "https://contoso.sharepoint.com/2026.11.01", null);
 
-        ResponseEntity<String> blocked = createPackageJobRaw("2026.11.01.001", List.of("pips:1.0.0"), false);
+        ResponseEntity<String> blocked = createPackageJobRaw("2026.11.01.001", List.of("pips:1.0.0"));
         assertThat(blocked.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(blocked.getBody()).contains("E-0302");
         // 구현계획서 402행 — 차단 응답이 기존 Job 정보(공유 링크)를 실어야 호출측이
@@ -195,17 +196,18 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
 
         jdbcTemplate.update("UPDATE package_job SET status = 'FAILED' WHERE version_name = ?", "2026.11.01.001");
 
-        ResponseEntity<PackageJobDetailResponse> retried = createPackageJob("2026.11.01.001", List.of("pips:1.0.0"), false);
+        ResponseEntity<PackageJobDetailResponse> retried = createPackageJob("2026.11.01.001", List.of("pips:1.0.0"));
         assertThat(retried.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(retried.getBody().job().status()).isEqualTo("PENDING");
     }
 
+    /** 완료된 Job을 다시 돌리는 유일한 경로다 — 패키지를 정리(DELETED)하면 재생성이 열린다. */
     @Test
-    void force로_DONE_Job을_재생성하면_공유링크는_유지되고_finishedAt은_초기화된다() {
+    void 정리된_Job을_재생성하면_공유링크는_유지되고_finishedAt은_초기화된다() {
         registerMainVersion("2026.11.11.001");
         registerAndSubmitSubVersion("2026.11.11.001", "pips", "1.0.0", null);
         String folderUrl = "https://contoso.sharepoint.com/2026.11.11";
-        insertPackageJob("2026.11.11.001", "DONE", folderUrl, null);
+        insertPackageJob("2026.11.11.001", "DELETED", folderUrl, null);
         // API로 먼저 조회해 비교 기준을 잡는다 — JDBC 직접 조회(java.sql.Timestamp)와
         // Hibernate의 Instant 매핑은 MySQL DATETIME(타임존 정보 없음)을 변환하는 경로가
         // 달라 값이 갈릴 수 있다. 같은 경로(API 응답)로 얻은 값끼리만 비교해야 안전하다.
@@ -215,24 +217,37 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
                 .job()
                 .createdAt();
 
-        ResponseEntity<PackageJobDetailResponse> forced = createPackageJob("2026.11.11.001", List.of("pips:1.0.0"), true);
+        ResponseEntity<PackageJobDetailResponse> recreated = createPackageJob("2026.11.11.001", List.of("pips:1.0.0"));
 
-        assertThat(forced.getStatusCode()).isEqualTo(HttpStatus.CREATED);
-        assertThat(forced.getBody().job().status()).isEqualTo("PENDING");
-        assertThat(forced.getBody().job().spFolderUrl()).isEqualTo(folderUrl);
-        assertThat(forced.getBody().job().finishedAt()).isNull();
+        assertThat(recreated.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(recreated.getBody().job().status()).isEqualTo("PENDING");
+        assertThat(recreated.getBody().job().spFolderUrl()).isEqualTo(folderUrl);
+        assertThat(recreated.getBody().job().finishedAt()).isNull();
         // createdAt(최초 생성 시각)은 재생성해도 그대로다 — 컬럼이 updatable=false라
         // resetForRerun이 건드리면 응답과 DB가 어긋난다.
-        assertThat(forced.getBody().job().createdAt()).isEqualTo(originalCreatedAt);
+        assertThat(recreated.getBody().job().createdAt()).isEqualTo(originalCreatedAt);
     }
 
     @Test
-    void 진행_중인_Job은_force로도_차단된다() {
+    void 진행_중인_Job은_재생성이_차단된다() {
         registerMainVersion("2026.11.21.001");
         registerAndSubmitSubVersion("2026.11.21.001", "pips", "1.0.0", null);
         insertPackageJob("2026.11.21.001", "DOWNLOADING", null, null);
 
-        ResponseEntity<String> response = createPackageJobRaw("2026.11.21.001", List.of("pips:1.0.0"), true);
+        ResponseEntity<String> response = createPackageJobRaw("2026.11.21.001", List.of("pips:1.0.0"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody()).contains("E-0302");
+    }
+
+    /** 살아 있는 산출물을 덮어쓰지 않는다 — 되돌리려면 패키지를 먼저 정리해야 한다. */
+    @Test
+    void 완료된_Job은_재생성이_차단된다() {
+        registerMainVersion("2026.11.22.001");
+        registerAndSubmitSubVersion("2026.11.22.001", "pips", "1.0.0", null);
+        insertPackageJob("2026.11.22.001", "DONE", "https://contoso.sharepoint.com/2026.11.22", null);
+
+        ResponseEntity<String> response = createPackageJobRaw("2026.11.22.001", List.of("pips:1.0.0"));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(response.getBody()).contains("E-0302");
@@ -249,7 +264,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         Runnable task = () -> {
             try {
                 barrier.await();
-                ResponseEntity<String> response = createPackageJobRaw("2026.11.31.001", List.of("pips:1.0.0"), false);
+                ResponseEntity<String> response = createPackageJobRaw("2026.11.31.001", List.of("pips:1.0.0"));
                 if (response.getStatusCode() == HttpStatus.CREATED) {
                     successCount.incrementAndGet();
                 }
@@ -285,7 +300,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         Runnable task = () -> {
             try {
                 barrier.await();
-                ResponseEntity<String> response = createPackageJobRaw("2026.11.32.001", List.of("pips:1.0.0"), false);
+                ResponseEntity<String> response = createPackageJobRaw("2026.11.32.001", List.of("pips:1.0.0"));
                 if (response.getStatusCode() == HttpStatus.CREATED) {
                     successCount.incrementAndGet();
                 }
@@ -307,7 +322,7 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
     @Test
     void 기동_시_고아_Job을_FAILED로_정리한다() {
         // PENDING도 포함한다 — waitForTasksToCompleteOnShutdown을 켜지 않아 큐에서 대기
-        // 중이던 Job은 재기동하면 사라진다. 빠뜨리면 그 메인버전은 force로도 영원히
+        // 중이던 Job은 재기동하면 사라진다. 빠뜨리면 그 메인버전은 영원히
         // 복구 불가능해진다(OrphanJobCleaner 클래스 javadoc 참고).
         registerMainVersion("2026.12.01.001");
         insertPackageJob("2026.12.01.001", "DOWNLOADING", null, null);
@@ -346,19 +361,18 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
     }
 
     private ResponseEntity<PackageJobDetailResponse> createPackageJob(
-            String versionName, List<String> imageTags, boolean force) {
+            String versionName, List<String> imageTags) {
         return restTemplate.postForEntity(
                 "/api/main-versions/{versionName}/package-job",
-                new PackageJobCreateRequest(imageTags, force),
+                new PackageJobCreateRequest(imageTags),
                 PackageJobDetailResponse.class,
                 versionName);
     }
 
-    private ResponseEntity<String> createPackageJobRaw(
-            String versionName, List<String> imageTags, boolean force) {
+    private ResponseEntity<String> createPackageJobRaw(String versionName, List<String> imageTags) {
         return restTemplate.postForEntity(
                 "/api/main-versions/{versionName}/package-job",
-                new PackageJobCreateRequest(imageTags, force),
+                new PackageJobCreateRequest(imageTags),
                 String.class,
                 versionName);
     }

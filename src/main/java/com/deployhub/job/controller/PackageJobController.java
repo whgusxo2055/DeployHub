@@ -50,22 +50,23 @@ public class PackageJobController {
     private final PackageValidationService packageValidationService;
 
     @Operation(summary = "매니페스트 확정 + Job 생성 (FN-03, FN-11 중복방지)")
-    @ApiResponse(responseCode = "400", description = "E-0301: 잘못된/중복/누락 image_tag"
-            + ", E-0308: 레지스트리에서 확인되지 않는 image_tag")
+    @ApiResponse(responseCode = "400", description = "E-0301: 잘못된/중복/누락 image_tag, E-0308: 레지스트리에서 확인되지 않는 image_tag")
     @ApiResponse(responseCode = "404", description = "E-0101: 메인버전 없음")
     @ApiResponse(responseCode = "409", description = "E-0302: 중복 Job"
             + ", E-0305: PENDING 담당 영역 존재 또는 서브버전 0건, E-1301: 동시 요청 충돌")
     @ApiResponse(responseCode = "503", description = "E-1502: 실행 대기열 포화")
     @PostMapping("/api/main-versions/{versionName}/package-job")
     public ResponseEntity<PackageJobDetailResponse> createPackageJob(
-            @PathVariable String versionName, @Valid @RequestBody PackageJobCreateRequest request) {
+            @PathVariable String versionName,
+            @Valid @RequestBody PackageJobCreateRequest request) {
+        // 레지스트리 검증을 create()전에 끝낸다. create()는 main_version 행 락을 쥐므로 외부 HTTP는 그 밖이라야 한다.
+        Map<String, ManifestInfo> manifestContext = packageValidationService.validate(request.imageTags());
+
+        // Job 행을 생성한다 — 트랜잭션 커밋 후에 워커를 제출해야 한다. 실패하면 400/409로 끝나고 아무것도 남기지 않는다.
         PackageJobDetailResponse created = packageJobService.create(versionName, request);
-        // 레지스트리 검증을 응답 안에서 끝낸다 — 비동기로 미루면 없는 태그에도 201이 나가 호출측이
-        // 성공으로 오해한다. create()의 트랜잭션(main_version 행 락) 밖이라야 외부 HTTP가 락을 물지 않는다.
-        packageJobService.changeStatus(versionName, JobStatus.VALIDATING);
-        Map<String, ManifestInfo> manifestContext = validateOrFail(versionName);
-        // 커밋 후에 워커를 제출한다 — 서비스 안에서 제출하면 워커가 아직 안 보이는 Job 행을 조회한다.
+
         try {
+            // 커밋 후에 워커를 제출한다 — 서비스 안에서 제출하면 워커가 아직 안 보이는 Job 행을 조회한다.
             jobOrchestrator.startValidated(versionName, manifestContext);
         } catch (TaskRejectedException e) {
             // 큐까지 가득 찬 경우 — Job 행은 이미 커밋됐으므로 바로 FAILED로 돌려 PENDING 좀비를 막는다.
@@ -107,7 +108,7 @@ public class PackageJobController {
     /** 검증 실패는 "시작하지 않았다"는 뜻이라 Job을 FAILED로 되돌리고 그대로 400으로 내보낸다. */
     private Map<String, ManifestInfo> validateOrFail(String versionName) {
         try {
-            return packageValidationService.validate(versionName);
+            return packageValidationService.validatePendingItems(versionName);
         } catch (RuntimeException e) {
             packageJobService.changeStatus(versionName, JobStatus.FAILED);
             throw e;
