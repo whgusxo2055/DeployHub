@@ -2,11 +2,13 @@ package com.deployhub.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.deployhub.job.dto.PackageItemResponse;
 import com.deployhub.job.dto.PackageJobCreateRequest;
 import com.deployhub.job.dto.PackageJobDetailResponse;
 import com.deployhub.job.service.OrphanJobCleaner;
+import com.deployhub.registry.ImageTagChecker;
 import com.deployhub.support.MySqlContainerSupport;
 import com.deployhub.version.dto.MainVersionCreateRequest;
 import com.deployhub.version.dto.MainVersionInfoResponse;
@@ -30,6 +32,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 /**
  * Phase 3 완료 기준(구현계획서 431-440행) — 매니페스트 확정, FN-11 중복 방지, 고아 Job
@@ -52,6 +55,10 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
     @Autowired
     private OrphanJobCleaner orphanJobCleaner;
 
+    // 실동작을 그대로 두는 spy다 — 다른 시나리오의 검증 경로를 바꾸지 않으면서 "불렸는지"만 본다.
+    @MockitoSpyBean
+    private ImageTagChecker imageTagChecker;
+
     // placeholder.invalid는 DNS조차 해석되지 않아 NCR 호출이 매번 재시도 정책을 다 태운다
     // (기본 backoff 5s+15s+45s) — 이 클래스는 그 실패 자체를 기다리므로 재시도를 꺼서
     // Awaitility 타임아웃 안에 끝나게 한다. 다른 시나리오(FN-03/FN-11 동기 검증)는 이
@@ -73,6 +80,23 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         });
         jdbcTemplate.execute("DELETE FROM sub_version");
         jdbcTemplate.execute("DELETE FROM main_version");
+    }
+
+    /**
+     * 싼 검사가 레지스트리 조회보다 앞서야 한다 — 태그 하나당 Basic 401 → 토큰 → 재호출로 3왕복이고
+     * imageTags 상한이 500이라, 순서가 뒤집히면 오타 하나가 NCR에 1,500회를 태우고 나서야 404가 된다.
+     */
+    @Test
+    void 없는_메인버전_생성_요청은_레지스트리를_부르지_않는다() {
+        ResponseEntity<String> response = restTemplate.postForEntity(
+                "/api/main-versions/{versionName}/package-job",
+                new PackageJobCreateRequest(List.of("api:2.0.0")),
+                String.class,
+                "2099.12.31.001");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).contains("E-0101");
+        verifyNoInteractions(imageTagChecker);
     }
 
     @Test

@@ -78,13 +78,15 @@ public class PackageJobService {
         List<String> targetTags = request.imageTags();
 
         // 서브버전 상태가 PENDING이면 패키징을 막는다
-        assertCreatable(versionName, targetTags);
+        assertPackagingAllowed(versionName, targetTags);
 
         // Job이 이미 존재하면 진행 중·완료 상태라 덮어쓰지 못한다 — DELETED·FAILED만 되돌릴 수 있다.
         PackageJob job = resolveJob(versionName);
 
         // 기존 항목을 모두 지우고 새로 생성한다 — 실패한 항목이 남아 있으면 재시도에서 tar를 재사용할 수 없으므로
         packageItemRepository.deleteByVersionName(versionName);
+        // Hibernate는 같은 트랜잭션 내 INSERT를 DELETE보다 먼저 플러시한다 — 같은 image_tag를
+        // 다시 쓰면 PK 충돌이 나므로 먼저 비운다.
         packageItemRepository.flush();
 
         for (String tag : targetTags) {
@@ -229,7 +231,19 @@ public class PackageJobService {
                 .toList();
     }
 
-    private void assertCreatable(String versionName, List<String> targetTags) {
+    /**
+     * 락 없는 사전 검사 — 레지스트리 조회(태그당 3왕복, 최대 500건) 앞에서 싼 것부터 떨어뜨린다.
+     * 통과해도 확정이 아니다: {@link #create}가 같은 검사를 main_version 락 안에서 다시 본다.
+     */
+    public void assertCreatable(String versionName, List<String> targetTags) {
+        // 락 걸린 조회 앞이라 findById를 쓰지 않는다 — 1차 캐시가 stale 인스턴스를 돌려주면 락이 무력해진다.
+        if (!mainVersionRepository.existsById(versionName)) {
+            throw new ApiException(ErrorCode.MAIN_VERSION_NOT_FOUND, List.of("versionName=" + versionName));
+        }
+        assertPackagingAllowed(versionName, targetTags);
+    }
+
+    private void assertPackagingAllowed(String versionName, List<String> targetTags) {
         //SubVersions의 상태가 PENDING이면 패키징을 막는다.
         PackagingEligibility eligibility = packagingEligibilityService.evaluate(versionName);
         if (!eligibility.eligible()) {

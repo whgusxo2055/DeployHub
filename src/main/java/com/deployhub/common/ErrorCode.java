@@ -86,7 +86,7 @@ public enum ErrorCode {
 
     // E-07xx 수동 재시도
     RETRY_REJECTED_JOB_NOT_FAILED("E-0702", HttpStatus.CONFLICT, "완료되었거나 진행 중인 Job은 재시도할 수 없습니다."),
-    WORK_DIR_LOST("E-0703", HttpStatus.CONFLICT, "작업 디렉터리가 소실되었습니다. 패키지를 정리한 뒤 다시 생성하세요."),
+    WORK_DIR_LOST("E-0703", HttpStatus.CONFLICT, "작업 디렉터리가 소실되었습니다. Job을 다시 생성하면 전체를 재수집합니다."),
 
     // E-10xx SharePoint 폴더 (로그 전용)
     FOLDER_LOOKUP_FAILED("E-1001", Exposure.LOG, "폴더 생성 경합 후 재조회에 실패했습니다."),

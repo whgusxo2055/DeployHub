@@ -59,6 +59,10 @@ public class PackageJobController {
     public ResponseEntity<PackageJobDetailResponse> createPackageJob(
             @PathVariable String versionName,
             @Valid @RequestBody PackageJobCreateRequest request) {
+        // 락도 트랜잭션 쓰기도 없는 검사를 먼저 떨어뜨린다 — 아래 레지스트리 조회가 태그당 3왕복이라
+        // 없는 메인버전·형식 오류·미등록 태그가 수백 건의 외부 호출을 태우고 나서야 400이 되면 안 된다.
+        packageJobService.assertCreatable(versionName, request.imageTags());
+
         // 레지스트리 검증을 create()전에 끝낸다. create()는 main_version 행 락을 쥐므로 외부 HTTP는 그 밖이라야 한다.
         Map<String, ManifestInfo> manifestContext = packageValidationService.validate(request.imageTags());
 
