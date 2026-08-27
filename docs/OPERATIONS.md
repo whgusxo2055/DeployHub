@@ -15,6 +15,8 @@
 | `WORK_DIR` | `/data/deployhub/jobs` | 아카이브가 쌓이는 곳. 디스크 여유의 기준이다 |
 | `NCR_ENDPOINT`·`NCR_ACCESS_KEY`·`NCR_SECRET_KEY` | — | 비어 있으면 **기동 실패**(`@NotBlank`) |
 | `GRAPH_TENANT_ID`·`GRAPH_CLIENT_ID` | — | 동일 |
+| `SP_DRIVE_ID` | — | **사이트 문서 라이브러리의 driveId. 비어 있으면 기동 실패**(`@NotBlank`). 폴백이 없다 |
+| `SP_ROOT_PATH` | `/Deploy/Packages` | 그 라이브러리 **루트 기준** 상대 경로. 실제 존재해야 한다(E-1002) |
 | `NCR_CLI_PATH` | `/usr/bin/skopeo` | 실행 불가면 기동 실패(E-0605) |
 | `STARTUP_CHECKS_ENABLED` | `true` | 끄면 NCR 도달성·skopeo·tar 점검을 건너뛴다. 운영에서 끄지 말 것 |
 | `SWAGGER_ENABLED` | `true` | 운영에서는 끄거나 nginx로 내부 IP만 허용 |
@@ -36,8 +38,13 @@
 **NCP Container Registry** — pull 전용이면 충분하다. 토큰 scope는
 `repository:<repo>:pull`과 `registry:catalog:*`만 쓰고, push는 하지 않는다.
 
-**Microsoft Graph** — `Sites.ReadWrite.All`(애플리케이션 권한, 관리자 동의 필요).
-`Files.ReadWrite.All`은 앱 전용 인증에서 `createUploadSession`을 지원하지 않으므로 쓸 수 없다.
+**Microsoft Graph** — 위임(delegated) 인증에 `Files.ReadWrite.All`이다. 사이트 문서 라이브러리는
+로그인 계정 드라이브 밖이라 `.All` 없이는 전 호출이 404다. 관리자 동의가 필요하고, `SP_DRIVE_ID`가
+가리키는 라이브러리에 그 계정의 쓰기 권한이 있어야 한다.
+
+토큰은 device code 흐름으로 한 번 받아 refresh token을 파일에 보관·회전한다(`SECRETS_DIR`).
+**scope를 바꾸면 기존 refresh token이 무효**라 device code를 다시 태우고 앱을 재기동해야 한다 —
+`GraphTokenService.readRefreshToken`이 파일보다 메모리 값을 우선하기 때문이다.
 
 권한과 **별개로** 테넌트가 `organization` 범위 공유 링크를 막고 있으면 링크 발급이 실패한다.
 그때는 폴더 `webUrl`로 폴백하고 Job은 완료시키되 경고(E-1005)로 남는다. 권한 신청 시

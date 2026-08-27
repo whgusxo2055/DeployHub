@@ -45,7 +45,6 @@ public class GraphApiClient {
     private final RestClient uploadClient;
     private final ObjectMapper objectMapper;
 
-    private volatile String resolvedDriveId;
 
     /**
      * {@code spring.http.client.read-timeout}(10초)은 JDK 클라이언트에서 <b>바디 전송을 포함한 요청
@@ -204,50 +203,17 @@ public class GraphApiClient {
         }
     }
 
-    /**
-     * 위임 인증이라 사이트가 아니라 로그인한 계정의 드라이브를 본다.
-     * SharePoint 전환 시: {@code /drives/{driveId}/root}로 바꿀 것 — 안 바꾸면 쓰지도 않는 드라이브를 보고 헬스가 계속 초록이다.
-     */
+    /** 실제로 쓰는 드라이브를 본다 — {@code /me/drive}를 보면 쓰기가 전부 실패해도 헬스가 초록으로 남는다. */
     public void healthCheck() {
-        get("/me/drive/root");
+        get("/drives/%s/root".formatted(resolveDriveId()));
     }
 
     /**
-     * {@code SP_DRIVE_ID}가 없으면 로그인한 계정의 기본 드라이브를 조회해 메모리에 캐시한다.
-     * SharePoint 전환 시: {@code /me/drive} 폴백을 지우고 SP_DRIVE_ID를 필수로 둘 것(또는 siteId를 받아 {@code /sites/{id}/drive} 조회).
-     * 이 값만 사이트 문서 라이브러리 driveId로 바뀌면 폴더·업로드의 {@code /drives/{driveId}/…} 호출은 그대로 돈다.
+     * 사이트 문서 라이브러리의 driveId다. {@code SP_DRIVE_ID}가 필수라 조회할 것이 없다 —
+     * 이 값만 맞으면 폴더·업로드의 {@code /drives/{driveId}/…} 호출은 종류를 안 가린다.
      */
     public String resolveDriveId() {
-        if (properties.driveId() != null && !properties.driveId().isBlank()) {
-            return properties.driveId();
-        }
-        String current = resolvedDriveId;
-        if (current != null) {
-            return current;
-        }
-        // ponytail: 락 안에서 네트워크 호출을 한다 — 드라이브 조회는 프로세스당 한 번이라 감당 가능하다.
-        synchronized (this) {
-            if (resolvedDriveId == null) {
-                resolvedDriveId = extractId(get("/me/drive"));
-            }
-            return resolvedDriveId;
-        }
-    }
-
-    private String extractId(String json) {
-        JsonNode node;
-        try {
-            node = objectMapper.readTree(json);
-        } catch (JsonProcessingException ex) {
-            log.warn("Graph drive 응답 파싱에 실패했습니다.", ex);
-            throw new ApiException(ErrorCode.GRAPH_UNAVAILABLE);
-        }
-        String id = node.path("id").asText(null);
-        if (id == null || id.isBlank()) {
-            log.warn("Graph drive 응답에 id가 없습니다.");
-            throw new ApiException(ErrorCode.GRAPH_UNAVAILABLE);
-        }
-        return id;
+        return properties.driveId();
     }
 
     /**

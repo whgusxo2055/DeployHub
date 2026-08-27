@@ -68,8 +68,8 @@ deployhub:
   sharepoint:
     tenant-id: ${GRAPH_TENANT_ID:}
     client-id: ${GRAPH_CLIENT_ID:}
-    # SharePoint 전환 시: SP_DRIVE_ID는 필수가 된다(사이트 문서 라이브러리 driveId).
-    # SP_ROOT_PATH도 그 라이브러리 루트 기준으로 다시 잡을 것 — OneDrive 기준 경로와 다르다.
+    # 사이트 문서 라이브러리의 driveId. 필수다(@NotBlank) — 비우면 기동이 실패한다.
+    # SP_ROOT_PATH는 그 라이브러리 루트 기준 상대 경로다.
     drive-id: ${SP_DRIVE_ID:}
     root-path: ${SP_ROOT_PATH:/Deploy/Packages}
     # 위임 인증용 refresh token 보관 파일. 최초 1회 device code 흐름으로 채워 넣는다.

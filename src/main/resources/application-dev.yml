@@ -28,3 +28,5 @@ deployhub:
   sharepoint:
     tenant-id: ${GRAPH_TENANT_ID:placeholder}
     client-id: ${GRAPH_CLIENT_ID:placeholder}
+    # @NotBlank라 비우면 컨텍스트가 안 뜬다 — 실 연동은 env var로 덮어쓴다.
+    drive-id: ${SP_DRIVE_ID:placeholder}

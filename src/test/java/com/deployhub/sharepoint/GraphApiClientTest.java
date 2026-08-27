@@ -32,7 +32,7 @@ import org.springframework.web.client.RestClient;
 class GraphApiClientTest {
 
     private static final GraphProperties PROPERTIES =
-            new GraphProperties("tenant", "client", null, "/Deploy/Packages");
+            new GraphProperties("tenant", "client", "drive-1", "/Deploy/Packages");
 
     private MockRestServiceServer server;
     private GraphTokenService tokenService;
@@ -51,10 +51,10 @@ class GraphApiClientTest {
     @Test
     void 응답이_401이면_토큰을_무효화하고_새_토큰으로_한번_재시도한다() {
         when(tokenService.getAccessToken()).thenReturn("stale-token", "fresh-token");
-        server.expect(requestTo("https://graph.microsoft.com/v1.0/me/drive/root"))
+        server.expect(requestTo("https://graph.microsoft.com/v1.0/drives/drive-1/root"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer stale-token"))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
-        server.expect(requestTo("https://graph.microsoft.com/v1.0/me/drive/root"))
+        server.expect(requestTo("https://graph.microsoft.com/v1.0/drives/drive-1/root"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer fresh-token"))
                 .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
 
@@ -68,7 +68,7 @@ class GraphApiClientTest {
     @Test
     void 응답이_403이면_권한_부족으로_즉시_실패한다() {
         when(tokenService.getAccessToken()).thenReturn("token");
-        server.expect(requestTo("https://graph.microsoft.com/v1.0/me/drive/root"))
+        server.expect(requestTo("https://graph.microsoft.com/v1.0/drives/drive-1/root"))
                 .andRespond(withStatus(HttpStatus.FORBIDDEN));
 
         assertThatThrownBy(() -> client.healthCheck())
@@ -77,17 +77,16 @@ class GraphApiClientTest {
                 .isEqualTo(ErrorCode.GRAPH_FORBIDDEN);
     }
 
+    /** 헬스가 실제로 쓰는 드라이브를 봐야 한다 — /me/drive를 보면 쓰기가 전부 실패해도 초록으로 남는다. */
     @Test
-    void driveId_미설정이면_사이트_조회_결과를_한번만_호출해서_캐시한다() {
+    void 헬스체크는_설정된_드라이브를_본다() {
         when(tokenService.getAccessToken()).thenReturn("token");
-        server.expect(requestTo("https://graph.microsoft.com/v1.0/me/drive"))
-                .andRespond(withSuccess("{\"id\":\"drive-abc\"}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://graph.microsoft.com/v1.0/drives/drive-1/root"))
+                .andRespond(withSuccess("{\"id\":\"root\"}", MediaType.APPLICATION_JSON));
 
-        String first = client.resolveDriveId();
-        String second = client.resolveDriveId();
+        client.healthCheck();
 
-        assertThat(first).isEqualTo("drive-abc");
-        assertThat(second).isEqualTo("drive-abc");
+        assertThat(client.resolveDriveId()).isEqualTo("drive-1");
         server.verify();
     }
 
