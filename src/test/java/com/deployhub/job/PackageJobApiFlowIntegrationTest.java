@@ -227,11 +227,16 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
 
     /** 완료된 Job을 다시 돌리는 유일한 경로다 — 패키지를 정리(DELETED)하면 재생성이 열린다. */
     @Test
-    void 정리된_Job을_재생성하면_공유링크는_유지되고_finishedAt은_초기화된다() {
+    void 정리된_Job을_재생성하면_공유링크는_유지되고_시각이_초기화된다() {
         registerMainVersion("2026.11.11.001");
         registerAndSubmitSubVersion("2026.11.11.001", "pips", "1.0.0", null);
         String folderUrl = "https://contoso.sharepoint.com/2026.11.11";
         insertPackageJob("2026.11.11.001", "DELETED", folderUrl, null);
+        // 7일 전으로 밀어 둔다 — created_at이 DATETIME(초 단위)이라 같은 초에 재생성하면
+        // 갱신 여부를 구분할 수 없다. 서버에서 실제로 난 증상(163시간 표기)과 같은 모양이다.
+        jdbcTemplate.update(
+                "UPDATE package_job SET created_at = DATE_SUB(NOW(), INTERVAL 7 DAY) WHERE version_name = ?",
+                "2026.11.11.001");
         // API로 먼저 조회해 비교 기준을 잡는다 — JDBC 직접 조회(java.sql.Timestamp)와
         // Hibernate의 Instant 매핑은 MySQL DATETIME(타임존 정보 없음)을 변환하는 경로가
         // 달라 값이 갈릴 수 있다. 같은 경로(API 응답)로 얻은 값끼리만 비교해야 안전하다.
@@ -247,9 +252,16 @@ class PackageJobApiFlowIntegrationTest extends MySqlContainerSupport {
         assertThat(recreated.getBody().job().status()).isEqualTo("PENDING");
         assertThat(recreated.getBody().job().spFolderUrl()).isEqualTo(folderUrl);
         assertThat(recreated.getBody().job().finishedAt()).isNull();
-        // createdAt(최초 생성 시각)은 재생성해도 그대로다 — 컬럼이 updatable=false라
-        // resetForRerun이 건드리면 응답과 DB가 어긋난다.
-        assertThat(recreated.getBody().job().createdAt()).isEqualTo(originalCreatedAt);
+        // createdAt은 '요청 시각'이라 재생성하면 이번 요청 시각으로 갱신된다 — 안 그러면
+        // 최초 생성 시각이 남아 소요 시간이 며칠짜리로 표기된다.
+        assertThat(recreated.getBody().job().createdAt()).isAfter(originalCreatedAt);
+        // 응답만 보면 안 된다 — 컬럼이 updatable=false면 메모리 대입은 성공하고 UPDATE에서만 빠져
+        // 응답에는 새 값이, DB에는 옛 값이 남는다. 비교는 SQL 안에서 해 JDBC/Hibernate 변환 경로 차이를 피한다.
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT created_at > DATE_SUB(NOW(), INTERVAL 1 DAY) FROM package_job WHERE version_name = ?",
+                        Boolean.class,
+                        "2026.11.11.001"))
+                .isTrue();
     }
 
     @Test
