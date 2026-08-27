@@ -78,7 +78,26 @@ curl -X DELETE 'localhost:8080/api/package-jobs/2026.08.24.001/package'
 2단계를 처리해도 여기 오르지 않으므로, 처리 여부는 `deleted_at`으로 확인한다.
 `failed`에 오른 건은 다음 배치가 자동으로 재시도한다.
 
-## 4. 오류 코드별 대응
+## 4. DB 마이그레이션
+
+스키마는 Flyway가 관리하고 Hibernate는 `ddl-auto: validate`로 검증만 한다. **적용된 마이그레이션
+파일은 고치지 않는다** — 주석 한 줄만 바뀌어도 이미 적용한 DB가 `Migration checksum mismatch`로
+기동을 못 한다. `MigrationImmutabilityTest`가 파일 CRC32를 고정해 로컬에서 먼저 잡는다.
+
+2026-08-27에 옛 V1~V3을 `V1__init_schema.sql` 하나로 통합했다. 통합본은 당시 서버
+`SHOW CREATE TABLE`을 그대로 재현한 것이라 **기존 DB의 스키마는 바뀌지 않는다**. 다만 이력
+테이블의 체크섬이 옛 V1의 것이라, 통합본을 처음 배포하는 기존 DB는 한 번만 재기준선이 필요하다.
+
+```sql
+-- 기존 DB에서 한 번만. 진행 중 Job이 없는지 GET /api/package-jobs로 먼저 확인할 것.
+DROP TABLE flyway_schema_history;
+```
+
+지운 뒤 앱을 재기동하면 `baseline-on-migrate: true` + `baseline-version: 1`이 이력 테이블을
+새로 만들고 V1을 이미 적용된 것으로 기록한다(스키마가 비어 있지 않고 이력만 없을 때만 동작하므로
+빈 DB·테스트는 평소대로 V1을 적용한다). 스키마 자체는 건드리지 않으므로 데이터 손실이 없다.
+
+## 5. 오류 코드별 대응
 
 ### 기동이 안 될 때
 
@@ -137,7 +156,7 @@ curl -sS -o /dev/null -D - https://<host>/v2/
 "앱만 고장난 것"으로 오판하기 쉽다. curl 성공만으로 확정하지 말고 skopeo나 앱으로 한 번 더
 확인할 것. 클라이언트 설정으로는 우회할 수 없다.
 
-## 5. 알려진 제약
+## 6. 알려진 제약
 
 - **업로드 in-flight 힙은 `UPLOAD_CONCURRENCY × UPLOAD_CHUNK_SIZE × 2.05`다.** 2.05배는 실측값으로,
   `readChunk`의 `byte[]` 한 벌과 RestClient/JDK HttpClient의 전송 버퍼 한 벌이다(청크 크기·병렬도와 무관하게 일정).

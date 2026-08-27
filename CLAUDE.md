@@ -51,7 +51,7 @@
 - **집계 전에 `rm -rf backend/build-remote`를 먼저 할 것** — t.sh는 리포트를 덮어쓸 뿐 지우지 않아, 이전 실행의 XML이 남아 있으면 한 클래스만 돌려도 전체 건수가 잡힌다. 실제로 5건짜리 실행이 95건으로 보였다.
 - 클래스 하나만 돌릴 때는 `--tests "com.deployhub.job.XxxTest"`처럼 **FQCN**으로 넘기는 게 안전하다(`*Xxx` 글롭은 로컬·원격 셸을 두 번 거친다).
 - 서버 `sudo`는 비밀번호를 요구한다 — 패키지 설치나 `/data` 생성은 사용자에게 **서버 터미널에서** 실행을 요청할 것(위 `!` 프리픽스 항목 참고).
-- 서버 DB가 로컬보다 뒤처져 있을 수 있다(2026-08-18 재기동 시 V2였다) — 재기동하면 밀린 마이그레이션이 한꺼번에 돈다. UNIQUE를 새로 거는 마이그레이션은 기존 데이터로 충돌 검사를 **먼저** 할 것(실패하면 Flyway가 죽어 앱이 안 뜬다).
+- 서버 DB가 로컬보다 뒤처져 있을 수 있다 — 재기동하면 밀린 마이그레이션이 한꺼번에 돈다. UNIQUE를 새로 거는 마이그레이션은 기존 데이터로 충돌 검사를 **먼저** 할 것(실패하면 Flyway가 죽어 앱이 안 뜬다).
 - `t.sh`는 테스트 러너라 앱을 재배포하지 않는다. 배포는 t.sh의 rsync 2줄(`backend/` + `docker-compose.yml`, `.env`는 절대 제외) 후 `ssh devsrv 'cd DeployHub && docker compose up -d --build'`.
 - 셸 작업 디렉터리가 도중에 `/mnt/c/Project`로 초기화되는 일이 있다 — gradlew는 항상 `cd /mnt/c/Project/backend &&`로 시작할 것.
 - `gh` CLI가 없다(WSL·Windows 양쪽). PR은 `https://github.com/whgusxo2055/DeployHub/compare/master...<브랜치>?expand=1`로 열거나 github MCP를 쓴다 — user scope + `Authorization: <PAT>` 헤더(`Bearer` 접두사 불필요), 세션을 재시작해야 도구가 붙는다.
@@ -74,8 +74,11 @@
 
 - **주석·Swagger는 압축한다.** `@Operation`은 `summary` 1줄만 쓰고 `description`은 달지 않는다(예외 사유는 `@ApiResponse`가 이미 담는다). 주석·javadoc은 **2줄 이내**로, "왜"만 남기고 "무엇"은 코드가 말하게 한다. 3줄이 필요하면 그건 주석이 아니라 `DEFERRED.md` 항목이거나 테스트로 남길 것.
 - `version_name`은 로컬 작업 디렉터리명(`Path.of(workDir, versionName, "images")`)과 SharePoint 폴더명으로 그대로 쓰인다 — 등록 정규식은 형식 취향이 아니라 경로 이탈 방어이자 **정렬 전제**다(index 3자리 고정이라 PK 문자열 비교가 곧 배포 순서). 완화 금지. `image_tag` 쪽은 NCR REST 경로 주입만 막으면 되고 distribution 문법을 재현할 필요는 없다. tar 파일명은 `/`·`:`를 `_`로 치환할 뿐이라 단사가 아니다(`a/b:1` = `a_b:1`) — 그 충돌은 파일명이 아니라 확정 시점 검사(`assertTargetTagsValid`, E-0301)가 막는다.
-- 테이블 기본 대조가 `utf8mb4_0900_ai_ci`라 **자바 `equals`와 DB 행 선택 기준이 다르다** — `cc`/`CC`·전각·ZWSP가 자바 검증을 통과하고도 같은 행을 잡는다. V4에서 `image_tag` 두 컬럼만 `utf8mb4_bin`으로 옮겼고 `code`·`version_name`은 여전히 ai_ci다. 저장·비교에는 경로 문자열이 아니라 DB에서 얻은 정규값을 쓸 것(`SubVersionWriter`의 `canonical`).
+- 테이블 기본 대조가 `utf8mb4_0900_ai_ci`라 **자바 `equals`와 DB 행 선택 기준이 다르다** — `cc`/`CC`·전각·ZWSP가 자바 검증을 통과하고도 같은 행을 잡는다. 통합 V1에서 `image_tag` 두 컬럼만 `utf8mb4_bin`으로 잡았고 `code`·`version_name`은 여전히 ai_ci다. 저장·비교에는 경로 문자열이 아니라 DB에서 얻은 정규값을 쓸 것(`SubVersionWriter`의 `canonical`).
 - Flyway는 마이그레이션 SQL의 `${...}`를 **주석 안에서도** 플레이스홀더로 치환한다 — 값이 없으면 `No value provided for placeholder`로 기동이 죽고, 통합 테스트가 컨텍스트 로딩 실패로 무더기 실패한다. SQL 주석에 환경변수 이름을 적을 땐 달러-중괄호를 쓰지 말 것.
+- **이미 적용된 마이그레이션 파일은 주석 한 줄도 고치지 말 것** — Flyway가 파일 내용으로 체크섬을 내므로 `Migration checksum mismatch`로 기동이 죽는다(2026-08-26 옛 V3에 주석 3줄을 넣어 서버가 못 떴다). **Testcontainers는 매번 빈 DB라 이 부류를 절대 못 잡는다** — 그래서 `MigrationImmutabilityTest`가 파일 CRC32를 고정한다. 새 마이그레이션을 추가할 때만 그 표에 줄을 늘리고, 기존 값을 고쳐야 한다면 그건 파일을 잘못 건드린 것이다. 되돌리는 게 정공법이고 `flyway repair`는 공유 DB에 쓰기가 들어가며 "적용본과 파일이 다르다"는 사실만 덮는다.
+- **마이그레이션은 2026-08-27에 V1 하나로 통합했다**(옛 V1+V2+V3). 기존 DB는 `flyway_schema_history`를 지우고 `baseline-on-migrate`+`baseline-version: 1`로 재기준선을 잡아 넘어온다 — 그 설정은 스키마가 있고 이력만 없을 때만 동작하므로 빈 DB는 평소대로 V1을 적용한다. 통합본은 서버 `SHOW CREATE TABLE`을 그대로 재현한 것이라 기존 DB에는 무변화다.
+- `version_name` 개명(옛 V3)은 **DB만 고쳤다** — `version_name`은 로컬 작업 디렉터리명이기도 해서, 정리(24h 유예) 전 tar가 남아 있으면 work-dir 아래 옛 이름 디렉터리도 함께 rename해야 한다(2026-08-25 수동 처리 완료).
 - 제약 위반을 `catch (DataIntegrityViolationException)`으로 잡으려면 `saveAndFlush`여야 한다 — `save`는 커밋 시점에 던져 catch 밖으로 샌다.
 - `@Component` 클래스에 테스트 주입용 보조 생성자(예: `RestClient.Builder` 파라미터)를 추가하면, 실제 사용할 생성자에 `@Autowired`를 명시할 것. 생성자가 2개 이상이면 Spring이 (package-private이어도) 선택을 못 하고 "No default constructor found"로 기동이 죽는다.
 - 외부 API 클라이언트를 테스트할 때는 `MockRestServiceServer.bindTo(RestClient.Builder)`를 그 보조 생성자에 주입하는 패턴을 쓴다 (`NcrRegistryClient`, `GraphTokenService` 참고).
@@ -110,12 +113,12 @@
 - **오류 코드는 `ErrorCode` enum 하나에만 정의한다** — 메서드 본문에서 `"E-1102: ..."`처럼 문자열로 만들지 말 것(2026-08-20 통합). 예전에는 `ErrorCode`/`ItemErrorCode` 둘뿐이라 로그 전용 코드가 갈 곳이 없어 11개가 메서드 본문에 흩어져 있었다.
 - **노출 경계는 `ErrorCode.Exposure`가 정한다.** `PUBLIC`은 HTTP 응답이나 무인증 `GET /api/package-jobs/{versionName}`의 `error_message`로 나가므로 **문구에 서버 경로·호스트를 넣지 말 것**. `LOG`는 로그에만 남아 경로를 실어도 된다. 강제는 세 겹이다 — ①`PackageItem.markFailed(ErrorCode)`가 문자열을 안 받는다 ②`ApiException`이 `LOG` 코드를 거부한다 ③`ErrorCodeExposureTest`가 `PUBLIC` 문구에 경로 패턴이 없는지, `HttpStatus`가 있는 코드가 `PUBLIC`인지 검사한다. 컨텍스트는 `toLogMessage(detail)`로만 붙이고, `ApiException`의 `details`는 값이 들어가는 자리라 검사 대상이 아니다(리뷰로 본다).
 - 컨트롤러의 `@ApiResponse(description = "E-xxxx: ...")`만 예외다 — 정의가 아니라 Swagger 문서라 유지하되, enum 문구와 따로 관리되므로 드리프트에 주의할 것.
-- `ErrorCode`에 코드를 추가하면 `docs/OPERATIONS.md` §4 표에도 넣을 것 — 실제로 E-0308이 누락됐고 옆 행 E-0501 설명이 옛 설계로 남아 있었다.
+- `ErrorCode`에 코드를 추가하면 `docs/OPERATIONS.md` §5 표에도 넣을 것 — 실제로 E-0308이 누락됐고 옆 행 E-0501 설명이 옛 설계로 남아 있었다.
 - **HTTP 응답 메시지는 `ErrorCode` enum에만 둔다** — `ApiException`에 문자열을 넘기는 생성자는 없앴다. 컨텍스트는 `details`(키=값 형태)로 넘기고, 문구가 달라야 하는 상황이면 코드를 새로 정의할 것(예: "진행 중" E-1404 vs "그 사이 재실행됨" E-1405).
 - 항목 실패 사유(`package_item.error_message`)도 같은 규칙으로 `ItemErrorCode` enum이다. 이 값이 무인증 응답에 그대로 실리므로 서버 경로·업스트림 본문은 `PackageItemFailure.fail`의 `detail`로 넘겨 로그에만 남긴다.
 - 외부 HTTP는 트랜잭션 밖에서 부른다. **같은 빈 안에서 메서드를 나눠 불러도 프록시를 안 타므로** 쓰기 구간을 별도 빈으로 뺄 것 (`SubVersionService` → `SubVersionWriter`).
 - "컴포넌트 수정"과 "매니페스트 확정"은 `MainVersionRepository.lockByVersionName`(같은 `main_version` 행)으로 직렬화한다 — 두 경로 중 하나라도 락을 안 잡으면 확정된 매니페스트와 DB가 어긋난 채 패키징이 돈다.
-- 메인버전 정렬과 "직전 버전" 판정은 `version_name` 문자열 비교로 한다 — index를 3자리로 고정한 형식(`2026.08.24.001`, 그날 첫 릴리즈가 001)이라 그대로 배포 순서가 된다. **파생 `sort_key` 컬럼과 `sortKeyOf`는 2026-08-24에 제거했다**(V3 마이그레이션에서 기존 85건 개명). 자리수가 섞이면 전제가 깨지므로(`'...010' < '...2'`) 등록 정규식이 유일한 방어선이다. DB 정렬(utf8mb4_0900_ai_ci)이 같은 순서임은 서버에서 실측 확인했다.
+- 메인버전 정렬과 "직전 버전" 판정은 `version_name` 문자열 비교로 한다 — index를 3자리로 고정한 형식(`2026.08.24.001`, 그날 첫 릴리즈가 001)이라 그대로 배포 순서가 된다. **파생 `sort_key` 컬럼과 `sortKeyOf`는 2026-08-24에 제거했다**(옛 V3 마이그레이션에서 기존 85건 개명, 지금은 통합 V1에 흡수). 자리수가 섞이면 전제가 깨지므로(`'...010' < '...2'`) 등록 정규식이 유일한 방어선이다. DB 정렬(utf8mb4_0900_ai_ci)이 같은 순서임은 서버에서 실측 확인했다.
 - `@ConfigurationProperties`의 `Duration`에는 `@DurationUnit`을 붙일 것 — 없으면 단위 없는 값(`5,15`)이 **밀리초**로 바인딩돼 재시도 백오프가 조용히 꺼진다. 로그가 `toSeconds()`면 항상 0초로 찍혀 눈치채기 어렵다.
 - `HttpHeaders.getValuesAsList`는 따옴표를 무시하고 콤마로 쪼갠다 — `WWW-Authenticate: Bearer realm="...",service="..."`가 두 조각으로 망가진다. 원본 헤더 줄이 필요하면 `get()`을 쓸 것.
 - `@Value`에 `Duration` 파라미터를 쓰지 말 것 — `@ConfigurationProperties`와 달리 변환기가 없어 "no matching editors"로 기동이 죽는다. 문자열로 받아 `DurationStyle.detectAndParse(값, ChronoUnit.SECONDS)`로 파싱한다 (`GraphApiClient` 참고).
