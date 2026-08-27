@@ -5,9 +5,8 @@
 - `/mnt/c/Project/CLAUDE.md`(추적 밖)와 `backend/CLAUDE.md`(추적)는 **내용이 같다** — 한쪽을 고치면 다른 쪽도 같이 고칠 것(수동 동기화). **실명·서버 IP·계정·보안장비 벤더명·사내 호스트명은 어느 쪽에도 적지 않는다**(2026-08-27 결정, 종전에는 추적 밖 원본에 실값을 두었으나 전부 치환했다). 실값이 필요하면 `~/.ssh/config`와 `.env`에서 얻고 문서에는 `<ncr-host>` 같은 자리표시자를 쓸 것. 저장소명(`acme/*` 등)은 치환 대상이 아니다 — 기술 서술의 가독성을 위해 그대로 둔다.
 - `docker-compose.yml`/`.env`/`.env.example`도 같은 이유로 git 추적 밖이다. 이 파일들 변경은 커밋 대상이 아니다 — 필요하면 사용자에게 `git init` 여부를 먼저 물을 것.
 - **사내 NCR 호스트명은 이미 public에 올라가 있다** — 테스트 주석 3곳(`PackageJobDownloadFlowIntegrationTest` 2곳, `NcrRegistryClientTest` 1곳). 새로 넣지 말 것. 지워도 히스토리에는 남으므로 처리하려면 별도 판단이 필요하다.
-- 실물 검증 없이 미룬 이슈는 `backend/docs/DEFERRED.md`에 증상-원인-그때 할 일 순으로 적는다. 같은 지적이 리뷰에서 또 나오면 그 문서를 먼저 볼 것.
 - `구현계획서.md`의 세부 구현 메모는 요구사항이 아니다 — FN/REQ 번호와 "확정" 표기만 구속력이 있다. 실례: FN-09의 "파일별로 순차 업로드"는 구현 메모라 2026-08-27에 병렬로 뒤집었다.
-- 참고 문서: `/mnt/c/Project/구현계획서.md`(FN/REQ 번호·Phase·확정 사항), `backend/README.md`(요구사항·기동·`dev` 프로필), `backend/docs/OPERATIONS.md`(환경변수·외부 권한·오류코드별 대응), `backend/docs/DEFERRED.md`(알고도 미룬 것), `/mnt/c/Project/반입가이드.md`(고객사 반입 환경·검증 절차·실측 자료). FN 번호나 기동 절차를 추측하지 말고 여기서 확인할 것.
+- 참고 문서: `/mnt/c/Project/구현계획서.md`(FN/REQ 번호·Phase·확정 사항), `backend/README.md`(요구사항·기동·`dev` 프로필), `backend/docs/OPERATIONS.md`(환경변수·외부 권한·오류코드별 대응), `/mnt/c/Project/반입가이드.md`(고객사 반입 환경·검증 절차·실측 자료). FN 번호나 기동 절차를 추측하지 말고 여기서 확인할 것.
 - 패키지: `common`(ErrorCode·ApiException·재시도) · `config` · `health` · `registry`(NCR) · `sharepoint`(Graph 토큰·폴더·업로드) · `job`(Job 오케스트레이션·다운로드·정리) · `version`(메인/서브버전·컴포넌트·매니페스트 잠금).
 
 # 빌드 트러블슈팅
@@ -76,7 +75,7 @@
 
 # 코드 패턴
 
-- **주석·Swagger는 압축한다.** `@Operation`은 `summary` 1줄만 쓰고 `description`은 달지 않는다(예외 사유는 `@ApiResponse`가 이미 담는다). 주석·javadoc은 **2줄 이내**로, "왜"만 남기고 "무엇"은 코드가 말하게 한다. 3줄이 필요하면 그건 주석이 아니라 `DEFERRED.md` 항목이거나 테스트로 남길 것.
+- **주석·Swagger는 압축한다.** `@Operation`은 `summary` 1줄만 쓰고 `description`은 달지 않는다(예외 사유는 `@ApiResponse`가 이미 담는다). 주석·javadoc은 **2줄 이내**로, "왜"만 남기고 "무엇"은 코드가 말하게 한다. 3줄이 필요하면 그건 주석이 아니라 테스트로 남길 것.
 - `version_name`은 로컬 작업 디렉터리명(`Path.of(workDir, versionName, "images")`)과 SharePoint 폴더명으로 그대로 쓰인다 — 등록 정규식은 형식 취향이 아니라 경로 이탈 방어이자 **정렬 전제**다(index 3자리 고정이라 PK 문자열 비교가 곧 배포 순서). 완화 금지. `image_tag` 쪽은 NCR REST 경로 주입만 막으면 되고 distribution 문법을 재현할 필요는 없다. tar 파일명은 `/`·`:`를 `_`로 치환할 뿐이라 단사가 아니다(`a/b:1` = `a_b:1`) — 그 충돌은 파일명이 아니라 확정 시점 검사(`assertTargetTagsValid`, E-0301)가 막는다.
 - 테이블 기본 대조가 `utf8mb4_0900_ai_ci`라 **자바 `equals`와 DB 행 선택 기준이 다르다** — `cc`/`CC`·전각·ZWSP가 자바 검증을 통과하고도 같은 행을 잡는다. 통합 V1에서 `image_tag` 두 컬럼만 `utf8mb4_bin`으로 잡았고 `code`·`version_name`은 여전히 ai_ci다. 저장·비교에는 경로 문자열이 아니라 DB에서 얻은 정규값을 쓸 것(`SubVersionWriter`의 `canonical`).
 - Flyway는 마이그레이션 SQL의 `${...}`를 **주석 안에서도** 플레이스홀더로 치환한다 — 값이 없으면 `No value provided for placeholder`로 기동이 죽고, 통합 테스트가 컨텍스트 로딩 실패로 무더기 실패한다. SQL 주석에 환경변수 이름을 적을 땐 달러-중괄호를 쓰지 말 것.

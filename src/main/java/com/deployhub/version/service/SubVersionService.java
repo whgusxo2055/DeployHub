@@ -109,7 +109,7 @@ public class SubVersionService {
 
     /**
      * 이미 이 담당 영역에 저장된 태그는 등록 시점에 확인된 값이라 다시 묻지 않는다 — 안 그러면
-     * "변경 없음" 한 번에 태그 수만큼 NCR 왕복이 붙는다(DEFERRED 8번).
+     * "변경 없음" 한 번에 태그 수만큼 NCR 왕복이 붙는다.
      */
     private List<String> unverifiedTags(String versionName, String code, List<String> tags) {
         Set<String> stored = subVersionRepository
