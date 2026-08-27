@@ -6,9 +6,6 @@ import com.deployhub.common.RelativePathGuard;
 import com.deployhub.common.retry.RetryAfterHeader;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryableCallException;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
@@ -43,7 +40,6 @@ public class GraphApiClient {
     private final RetryExecutor retryExecutor;
     private final RestClient restClient;
     private final RestClient uploadClient;
-    private final ObjectMapper objectMapper;
 
 
     /**
@@ -63,7 +59,6 @@ public class GraphApiClient {
             GraphProperties properties,
             GraphTokenService tokenService,
             RetryExecutor retryExecutor,
-            ObjectMapper objectMapper,
             RestClient.Builder builder,
             ClientHttpRequestFactoryBuilder<?> requestFactoryBuilder,
             ClientHttpRequestFactorySettings requestFactorySettings,
@@ -73,7 +68,6 @@ public class GraphApiClient {
                 properties,
                 tokenService,
                 retryExecutor,
-                objectMapper,
                 builder,
                 builder.clone()
                         .requestFactory(requestFactoryBuilder.build(
@@ -98,13 +92,11 @@ public class GraphApiClient {
             GraphProperties properties,
             GraphTokenService tokenService,
             RetryExecutor retryExecutor,
-            ObjectMapper objectMapper,
             RestClient.Builder builder,
             RestClient.Builder uploadBuilder) {
         this.properties = properties;
         this.tokenService = tokenService;
         this.retryExecutor = retryExecutor;
-        this.objectMapper = objectMapper;
         // 업로드 URL은 절대 URL이라 baseUrl이 없다. 같은 builder를 넘기는 테스트를 위해 먼저 만든다 —
         // 아래 baseUrl 대입이 같은 인스턴스를 바꿔도 이미 만들어진 클라이언트에는 영향이 없다.
         this.uploadClient = uploadBuilder.build();

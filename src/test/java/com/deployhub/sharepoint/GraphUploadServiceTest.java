@@ -73,7 +73,7 @@ class GraphUploadServiceTest {
                 new RetryExecutor(new RetryProperties(2, List.of(Duration.ofMillis(1))), duration -> {});
         // 청크 전송용 클라이언트에도 같은 builder를 넘겨 MockRestServiceServer 하나가 둘 다 가로채게 한다.
         GraphApiClient graphApiClient =
-                new GraphApiClient(PROPERTIES, tokenService, retryExecutor, new ObjectMapper(), builder, builder);
+                new GraphApiClient(PROPERTIES, tokenService, retryExecutor, builder, builder);
         return new GraphUploadService(
                 packageItemRepository, graphApiClient, new RetryProperties(2, List.of(Duration.ofMillis(1))),
                 new ObjectMapper(), workDir.toString(), chunkSize, uploadExecutor);

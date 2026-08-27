@@ -15,7 +15,6 @@ import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -45,7 +44,7 @@ class GraphApiClientTest {
         tokenService = mock(GraphTokenService.class);
         RetryExecutor retryExecutor =
                 new RetryExecutor(new RetryProperties(1, List.of(Duration.ofMillis(1))), duration -> {});
-        client = new GraphApiClient(PROPERTIES, tokenService, retryExecutor, new ObjectMapper(), builder, builder);
+        client = new GraphApiClient(PROPERTIES, tokenService, retryExecutor, builder, builder);
     }
 
     @Test

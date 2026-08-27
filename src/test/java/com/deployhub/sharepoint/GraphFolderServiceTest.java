@@ -46,7 +46,7 @@ class GraphFolderServiceTest {
         when(tokenService.getAccessToken()).thenReturn("token");
         RetryExecutor retryExecutor =
                 new RetryExecutor(new RetryProperties(1, List.of(Duration.ofMillis(1))), duration -> {});
-        GraphApiClient graphApiClient = new GraphApiClient(PROPERTIES, tokenService, retryExecutor, new ObjectMapper(), builder, builder);
+        GraphApiClient graphApiClient = new GraphApiClient(PROPERTIES, tokenService, retryExecutor, builder, builder);
         packageJobService = mock(PackageJobService.class);
         service = new GraphFolderService(graphApiClient, PROPERTIES, packageJobService, new ObjectMapper());
     }
