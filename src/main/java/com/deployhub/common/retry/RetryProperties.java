@@ -23,6 +23,10 @@ public record RetryProperties(
         }
     }
 
+    /**
+     * 재시도 횟수에 따라 백오프를 결정한다. {@code attempt}가 1이면 최초 재시도 전 대기 시간, 2이면 두 번째 재시도 전 대기 시간이다.
+     * {@code attempt}가 {@code backoff.size()}보다 크면 마지막 백오프를 반복한다.
+     */
     public Duration backoffFor(int attempt) {
         int index = Math.min(Math.max(attempt - 1, 0), backoff.size() - 1);
         return backoff.get(index);

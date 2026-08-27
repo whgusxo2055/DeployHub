@@ -1,7 +1,7 @@
 package com.deployhub.job.service;
 
-import com.deployhub.common.BoundedParallelism;
-import com.deployhub.common.ItemErrorCode;
+import com.deployhub.common.ErrorCode;
+import com.deployhub.common.Concurrency;
 import com.deployhub.common.CredentialMasker;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
@@ -27,7 +27,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
@@ -50,15 +50,15 @@ public class PackageDownloadService {
             "(?i)unauthorized|forbidden|\\b401\\b|\\b403\\b|\\b404\\b|manifest unknown|not found|no space left");
     private static final int STDERR_CAPTURE_LIMIT = 8192;
     // Boot 빈이 아니라 기본 설정 매퍼 — authfile 직렬화 전용이라 Spring 컨텍스트 설정과 무관해야 한다.
-    private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
 
     private final PackageItemRepository packageItemRepository;
     private final NcrRegistryClient ncrRegistryClient;
     private final NcrProperties ncrProperties;
     private final RetryProperties retryProperties;
-    private final Executor downloadExecutor;
+    private final ObjectMapper objectMapper;
+    // 동시 다운로드 수는 이 풀의 고정 크기가 정한다.
+    private final ExecutorService downloadExecutor;
     private final String workDir;
-    private final int downloadConcurrency;
     private final int skopeoTimeoutSeconds;
 
     public PackageDownloadService(
@@ -66,17 +66,17 @@ public class PackageDownloadService {
             NcrRegistryClient ncrRegistryClient,
             NcrProperties ncrProperties,
             RetryProperties retryProperties,
-            @Qualifier("downloadExecutor") Executor downloadExecutor,
+            ObjectMapper objectMapper,
+            @Qualifier("downloadExecutor") ExecutorService downloadExecutor,
             @Value("${deployhub.work-dir}") String workDir,
-            @Value("${deployhub.download.concurrency:3}") int downloadConcurrency,
             @Value("${deployhub.download.skopeo-timeout:1800}") int skopeoTimeoutSeconds) {
         this.packageItemRepository = packageItemRepository;
         this.ncrRegistryClient = ncrRegistryClient;
         this.ncrProperties = ncrProperties;
         this.retryProperties = retryProperties;
+        this.objectMapper = objectMapper;
         this.downloadExecutor = downloadExecutor;
         this.workDir = workDir;
-        this.downloadConcurrency = downloadConcurrency;
         this.skopeoTimeoutSeconds = skopeoTimeoutSeconds;
     }
 
@@ -90,30 +90,34 @@ public class PackageDownloadService {
             return; // 전 항목 DOWNLOADED
         }
 
+        // workDir/versionName/images — tar를 담을 폴더를 미리 확보한다. skopeo는 목적지 폴더가 없으면 실패한다.
         Path imagesDir = Path.of(workDir, versionName, "images");
         try {
             Files.createDirectories(imagesDir);
         } catch (IOException e) {
-            throw new IllegalStateException("E-0602: 작업 디렉터리를 만들 수 없습니다: " + imagesDir, e);
+            throw new IllegalStateException(ErrorCode.WORK_DIR_CREATE_FAILED.toLogMessage(imagesDir), e);
         }
+
         checkDiskSpace(imagesDir, manifestContext, targets);
 
+        // skopeo 인증 파일을 만든다 — 임시 파일을 만들고 권한을 rw-------로 제한한다.
         AuthFile authFile = writeAuthFile();
         try {
-            List<Boolean> results = BoundedParallelism.mapInBatches(
-                    targets,
-                    downloadConcurrency,
+            // 동시 다운로드 — 실패 항목은 항목별로 기록한다. 일부 실패 시 IllegalStateException으로 Job을 FAILED로 전이시킨다.
+            List<Boolean> results = Concurrency.mapAll(
                     downloadExecutor,
+                    targets,
                     item -> downloadItemWithRetry(item, manifestContext.get(item.getImageTag()), imagesDir, authFile));
             if (results.contains(Boolean.FALSE)) {
                 throw new IllegalStateException("일부 항목 다운로드에 실패했습니다.");
             }
         } finally {
+            // 임시 인증 파일을 지운다 — skopeo는 실행 중에만 읽고 끝나면 닫는다.
             deleteQuietly(authFile.path());
         }
     }
 
-    // 예상 크기를 모르는 경로(재시도 재개)는 건너뛴다 — skopeo 실행이 어차피 실제 부족을 드러낸다.
+    // 레지스트리 확인이 전건 실패하면 컨텍스트가 비어 합계를 알 수 없다 — skopeo 실행이 어차피 실제 부족을 드러낸다.
     private void checkDiskSpace(Path imagesDir, Map<String, ManifestInfo> manifestContext, List<PackageItem> targets) {
         if (manifestContext.isEmpty()) {
             return;
@@ -122,11 +126,13 @@ public class PackageDownloadService {
                 .map(item -> manifestContext.get(item.getImageTag()))
                 .filter(Objects::nonNull)
                 .toList();
+
         // 미상이 하나라도 섞이면 합계가 과소평가돼 가드가 조용히 통과한다 — 아예 건너뛴다.
         if (infos.stream().anyMatch(ManifestInfo::hasUnknownSize)) {
             log.warn("예상 크기를 알 수 없는 항목이 있어 디스크 사전 확인을 건너뜁니다.");
             return;
         }
+
         // 포화 덧셈 — 항목이 각각 Long.MAX_VALUE로 포화하면 단순 합은 음수로 뒤집혀
         // 아래 비교가 무조건 통과한다(디스크 가드 fail-open). sumLayerSizes와 같은 패턴이다.
         long expectedTotal = 0L;
@@ -134,28 +140,36 @@ public class PackageDownloadService {
             long size = info.totalSize();
             expectedTotal = expectedTotal + size < expectedTotal ? Long.MAX_VALUE : expectedTotal + size;
         }
+
+        // 예상 합계에 여유율을 곱한 값이 실제 사용 가능 공간보다 크면 실패시킨다 — skopeo가
+        // 실제로 tar를 만들 때 부족하면 exitCode=1, stderr="no space left"로 죽는다. 이 가드는 그 전에 미리 잡아 재시도 횟수를 줄인다.
         long required = (long) (expectedTotal * REQUIRED_FREE_SPACE_RATIO);
         long usable = imagesDir.toFile().getUsableSpace();
         if (usable < required) {
-            log.warn("E-0602 디스크 여유 공간 부족: required={} bytes, usable={} bytes", required, usable);
-            throw new IllegalStateException("E-0602: 디스크 여유 공간이 부족합니다.");
+            log.warn("{} required={} bytes, usable={} bytes", ErrorCode.INSUFFICIENT_DISK.toMessage(), required, usable);
+            throw new IllegalStateException(ErrorCode.INSUFFICIENT_DISK.toMessage());
         }
     }
 
+    /**
+     * skopeo로 이미지를 받아 tar로 저장한다. 실패 시 재시도한다 — 재시도 횟수는 항목별로 기록한다.
+     * {@code manifestInfo}는 검증이 404로 확답하지 못한 항목(타임아웃·연결 실패)에서 null이다 — 그때만 즉석 재조회한다.
+     */
     private boolean downloadItemWithRetry(PackageItem item, ManifestInfo manifestInfo, Path imagesDir, AuthFile authFile) {
         ImageReference ref;
         try {
             ref = ImageReference.parse(item.getImageTag());
         } catch (IllegalArgumentException e) {
-            // 형식 오류는 항목 실패로 국한한다. 재시도 경로는 VALIDATING을 건너뛰어 이 방어가 실제로 쓰인다.
-            return failItem(item, ItemErrorCode.INVALID_IMAGE_TAG, e.getMessage());
+            // 확정 시점 assertTargetTagsValid가 이미 거르므로 정상 경로로는 도달하지 않는다 — 항목 실패로 국한하는 방어.
+            return failItem(item, ErrorCode.INVALID_IMAGE_TAG, e.getMessage());
         }
 
         ManifestInfo expected = manifestInfo != null ? manifestInfo : fetchManifestSafely(ref, item.getImageTag());
         if (expected == null) {
-            return failItem(item, ItemErrorCode.IMAGE_NOT_FOUND, null);
+            return failItem(item, ErrorCode.IMAGE_NOT_FOUND, null);
         }
 
+        // imagesDir 하위 tar파일 경로 생성 - 문자열 조립 대신 Path.resolve를 써서 경로 구분자를 OS에 맞게 처리한다.
         Path tarPath = imagesDir.resolve(ref.tarFileName());
 
         int attempt = 0;
@@ -163,26 +177,34 @@ public class PackageDownloadService {
             // 아카이브 목적지는 기존 파일 수정을 지원하지 않는다 — 남은 tar가 있으면 재시도가
             // 매번 즉시 실패한다. 마지막 실패 시점이 아니라 매 시도 시작에 지워야 한다.
             deleteQuietly(tarPath);
+
             SkopeoResult result = runSkopeo(ref, tarPath, authFile);
+            // exitCode=0이면 stderr가 비어있든 말든 성공으로 본다.
             if (result.exitCode() == 0) {
                 return handleSuccess(item, expected, ref, tarPath);
             }
 
+            // exitCode!=0이면 stderr를 마스킹해 로그와 항목 실패 사유에 남긴다.
             String maskedStderr =
                     CredentialMasker.mask(result.stderr(), ncrProperties.accessKey(), ncrProperties.secretKey(), authFile.base64Value());
+
+            // 재시도 불가 stderr는 401/403/404, manifest unknown, not found, no space left 등이다.
             boolean retryable = !result.nonRetryable() && isRetryable(maskedStderr);
+
+            // 타임아웃이면 재시도 가능하더라도 maxRetries를 넘어가면 포기한다.
             if (!retryable || attempt >= retryProperties.maxRetries()) {
                 deleteQuietly(tarPath);
                 return failItem(
                         item,
                         result.errorCode() != null
                                 ? result.errorCode()
-                                : (result.timedOut() ? ItemErrorCode.SKOPEO_TIMEOUT : ItemErrorCode.SKOPEO_FAILED),
+                                : (result.timedOut() ? ErrorCode.SKOPEO_TIMEOUT : ErrorCode.SKOPEO_FAILED),
                         "exit=%d, stderr=%s".formatted(result.exitCode(), maskedStderr));
             }
             attempt++;
             item.incrementRetryCount();
             packageItemRepository.save(item);
+            // 재시도 전 백오프 대기 — 재시도 횟수에 따라 백오프를 늘린다. InterruptedException이면 호출자가 인터럽트된 경우다.
             RetryExecutor.sleepOrThrowOnInterrupt(retryProperties.backoffFor(attempt));
         }
     }
@@ -205,7 +227,7 @@ public class PackageDownloadService {
             deleteQuietly(tarPath);
             return failItem(
                     item,
-                    current == null ? ItemErrorCode.DIGEST_UNVERIFIABLE : ItemErrorCode.DIGEST_MISMATCH,
+                    current == null ? ErrorCode.DIGEST_UNVERIFIABLE : ErrorCode.DIGEST_MISMATCH,
                     "expected=%s, current=%s".formatted(expectedDigest, currentDigest));
         }
 
@@ -214,11 +236,11 @@ public class PackageDownloadService {
             fileSize = Files.size(tarPath);
         } catch (IOException e) {
             deleteQuietly(tarPath);
-            return failItem(item, ItemErrorCode.ARCHIVE_UNREADABLE, e.getMessage());
+            return failItem(item, ErrorCode.ARCHIVE_UNREADABLE, e.getMessage());
         }
         if (fileSize == 0) {
             deleteQuietly(tarPath);
-            return failItem(item, ItemErrorCode.ARCHIVE_EMPTY, null);
+            return failItem(item, ErrorCode.ARCHIVE_EMPTY, null);
         }
 
         item.markDownloaded(fileSize);
@@ -226,7 +248,7 @@ public class PackageDownloadService {
         return true;
     }
 
-    private boolean failItem(PackageItem item, ItemErrorCode errorCode, String detail) {
+    private boolean failItem(PackageItem item, ErrorCode errorCode, String detail) {
         return PackageItemFailure.fail(packageItemRepository, item, errorCode, detail);
     }
 
@@ -247,39 +269,36 @@ public class PackageDownloadService {
         command.add("copy");
         command.add("--authfile");
         command.add(authFile.path().toString());
-        // 원본 바이트를 그대로 담아 아카이브 digest가 레지스트리 digest와 같아진다. 포맷을
-        // 강제하면(--format v2s2 등) 안 된다 — 인덱스에 붙은 buildx 어테스테이션에서
-        // "Unknown media type ... vnd.in-toto+json"으로 죽는다(NCR 12개 중 3개가 해당).
+
+        // 원본 형식을 유지해 아카이브 digest가 레지스트리 digest와 같아진다 — --format으로
+        // 강제하면 인덱스에 붙은 buildx 어테스테이션(vnd.in-toto+json)에서 죽는다.
         command.add("--preserve-digests");
-        // 인덱스를 평탄화하지 않고 통째로 담는다. 빠지면 skopeo가 플랫폼 하나만 골라
-        // 담아 아카이브 digest가 인덱스 digest와 달라진다(무결성 대조가 항상 오탐).
+
+        // 빠지면 인덱스가 플랫폼 하나로 평탄화돼 digest가 어긋난다(무결성 대조가 항상 오탐).
         command.add("--multi-arch");
         command.add("all");
         if (isPlainHttp(ncrProperties.endpoint())) {
             command.add("--src-tls-verify=false");
         }
         command.add("docker://%s/%s:%s".formatted(host, ref.repository(), ref.tag()));
-        // oci-archive:는 레이어 압축을 보존한다(docker-archive:는 전부 풀어 담아 산출물이 몇 배로 불어난다).
-        //
-        // 목적지 참조는 반드시 **레지스트리 호스트가 붙은 완전 수식 참조**여야 한다. 이 값이
-        // index.json의 org.opencontainers.image.ref.name이 되는데, containerd 이미지 저장소는
-        // 그 문자열을 이미지 이름으로 그대로 기록하기 때문이다. 호스트가 없으면("acme/x:1.0")
-        // Docker는 조회할 때 docker.io/를 붙여 정규화하므로 기록된 이름과 영영 안 맞는다 —
-        // 적재는 되는데 `docker run acme/x:1.0`이 Docker Hub에서 받으려 하고(pull access denied),
-        // inspect/tag/rmi가 전부 "No such image"가 되며 `docker images`에 같은 행이 두 번 뜬다.
-        //
-        // 그 호스트로 실제 NCR 엔드포인트를 쓰면 안 된다 — 아카이브는 SharePoint를 거쳐 고객사로
-        // 나가므로 사내 레지스트리 주소가 그대로 실린다. 대신 Docker의 기본 레지스트리인
-        // docker.io를 명시한다. 조회 시 정규화 결과와 같아져 이름이 살아나고, `docker images`는
-        // docker.io/ 접두사를 표시에서 떼므로 고객사가 보는 이름은 "acme/x:1.0" 그대로다(실측).
+
+        // 목적지 참조가 index.json의 ref.name이 된다 — 완전 수식이 아니면 적재는 되는데 이름으로 못 쓴다.
+        // 고객사로 나가는 파일이라 호스트는 NCR이 아닌 docker.io다(회귀: PackageJobDownloadFlowIntegrationTest).
         command.add("oci-archive:%s:docker.io/%s:%s".formatted(tarPath, canonicalRepository(ref), ref.tag()));
 
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
         // 기본값이 파이프라 닫지 않으면 프로세스가 끝나도 파일 디스크립터가 GC까지 남는다.
         pb.redirectInput(ProcessBuilder.Redirect.from(nullDevice()));
+        Process process;
         try {
-            Process process = pb.start();
+            process = pb.start();
+        } catch (IOException e) {
+            // StartupChecks가 조기 검출하지만 기동 이후 경로가 사라지는 경우를 방어한다.
+            // 바이너리 누락은 재시도해도 소용없다 — 코드를 함께 실어 백오프를 건너뛰게 한다.
+            return new SkopeoResult(-1, e.getMessage(), false, ErrorCode.SKOPEO_NOT_EXECUTABLE);
+        }
+        try {
             // StringBuilder가 아니라 StringBuffer — join() 타임아웃 시 리더 스레드가 쓰는 도중 읽게 된다.
             StringBuffer stderrBuffer = new StringBuffer();
             // stderr 파이프가 OS 버퍼를 채우면 자식이 write()에서 막혀 타임아웃으로 오판된다 —
@@ -299,18 +318,23 @@ public class PackageDownloadService {
             });
             stderrReader.setDaemon(true);
             stderrReader.start();
+
+            // 타임아웃은 false 반환이다 — InterruptedException은 호출자가 인터럽트된 경우다.
             boolean finished = process.waitFor(skopeoTimeoutSeconds, TimeUnit.SECONDS);
+            // 타임아웃이면 프로세스를 강제 종료한다 — skopeo는 SIGTERM을 무시하고 SIGKILL로 죽는다.
             if (!finished) {
                 process.destroyForcibly();
             }
+
+            // stderrReader.join()는 타임아웃이 없으므로 skopeo 종료 후 5초만 기다린다.
             stderrReader.join(Duration.ofSeconds(5).toMillis());
             int exitCode = finished ? process.exitValue() : -1;
+
             return new SkopeoResult(exitCode, stderrBuffer.toString(), !finished);
-        } catch (IOException e) {
-            // StartupChecks가 조기 검출하지만 기동 이후 경로가 사라지는 경우를 방어한다.
-            // 바이너리 누락은 재시도해도 소용없다 — 코드를 함께 실어 백오프를 건너뛰게 한다.
-            return new SkopeoResult(-1, e.getMessage(), false, ItemErrorCode.SKOPEO_NOT_EXECUTABLE);
         } catch (InterruptedException e) {
+            // invokeAll은 호출자가 인터럽트되면 형제 태스크를 cancel(true)로 끊는다(실측) —
+            // 여기서 안 죽이면 skopeo가 살아남아 지워질 tar에 계속 쓴다.
+            process.destroyForcibly();
             Thread.currentThread().interrupt();
             throw new IllegalStateException("다운로드 대기 중 인터럽트되었습니다.", e);
         }
@@ -320,6 +344,10 @@ public class PackageDownloadService {
         return new java.io.File(System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win") ? "NUL" : "/dev/null");
     }
 
+    /**
+     * skopeo 인증 파일을 만든다 — 임시 파일을 만들고 권한을 rw-------로 제한한다. Windows는 POSIX 권한을 지원하지 않으므로
+     * UnsupportedOperationException이 나면 경고만 남기고 진행한다.
+     */
     private AuthFile writeAuthFile() {
         String host = stripScheme(ncrProperties.endpoint());
         String authValue = Base64.getEncoder()
@@ -336,7 +364,7 @@ public class PackageDownloadService {
                 log.warn("파일 권한 설정을 지원하지 않는 파일시스템입니다 — 권한 제한 없이 진행합니다: {}", authFile);
             }
             // 자격 증명에 따옴표·역슬래시가 섞여도 깨지지 않게 문자열 조립 대신 Jackson으로 직렬화한다.
-            Files.writeString(authFile, JSON_MAPPER.writeValueAsString(content));
+            Files.writeString(authFile, objectMapper.writeValueAsString(content));
             return new AuthFile(authFile, authValue);
         } catch (IOException e) {
             throw new IllegalStateException("skopeo 인증 파일을 만들 수 없습니다.", e);
@@ -381,7 +409,7 @@ public class PackageDownloadService {
     }
 
     /** {@code errorCode}가 있으면 stderr 분류보다 우선한다(예: 바이너리 자체가 없는 경우). */
-    private record SkopeoResult(int exitCode, String stderr, boolean timedOut, ItemErrorCode errorCode) {
+    private record SkopeoResult(int exitCode, String stderr, boolean timedOut, ErrorCode errorCode) {
 
         SkopeoResult(int exitCode, String stderr, boolean timedOut) {
             this(exitCode, stderr, timedOut, null);

@@ -55,11 +55,10 @@ docker compose -f docker-compose.dev.yml up -d
 |---|---|
 | `GET /api/main-versions` | 메인버전 목록 (FN-01) |
 | `GET /api/main-versions/{v}` | 메인버전 + 서브버전 조회 (FN-02) |
-| `POST /api/main-versions` · `PUT /api/main-versions/{v}` | 메인버전 등록·수정 |
-| `PUT /api/main-versions/{v}/sub-versions` | 서브버전 일괄 등록·수정 (FN-02-1) |
+| `POST /api/main-versions` · `PUT /api/main-versions/{v}` | 메인버전 등록(직전 담당 영역 전건 복사)·수정 |
+| `PUT /api/main-versions/{v}/sub-versions/{code}` | 서브버전 1건 등록·수정 + 확인 상태 설정 (FN-02-1) |
 | `DELETE /api/sub-versions/{id}` | 서브버전 삭제 |
 | `GET /api/main-versions/{v}/packaging-eligibility` | 패키징 가능 여부 (FN-02-1) |
-| `GET /api/main-versions/{v}/changed-components` | 직전 대비 변경 컴포넌트 (FN-03) |
 | `POST /api/main-versions/{v}/package-job` | 매니페스트 확정·Job 생성 (FN-03) |
 | `GET /api/package-jobs` · `GET /api/package-jobs/{v}` | Job 목록·상세 (진행률 폴링) |
 | `POST /api/package-jobs/{v}/retry` | 실패 항목 재시도 (FN-07) |
@@ -69,7 +68,6 @@ docker compose -f docker-compose.dev.yml up -d
 | `GET /api/health/registry` · `/api/health/sharepoint` | 외부 연동 점검 (FN-04-1·FN-04-5) |
 
 운영 절차·환경변수·오류 코드별 대응은 [docs/OPERATIONS.md](docs/OPERATIONS.md)를 참고한다.
-알고도 미뤄 둔 이슈와 그때 할 일은 [docs/DEFERRED.md](docs/DEFERRED.md)에 있다.
 
 ## 테스트
 

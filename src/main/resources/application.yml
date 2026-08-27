@@ -17,6 +17,12 @@ spring:
     username: ${DB_USERNAME:deployhub}
     password: ${DB_PASSWORD:deployhub}
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      # 다운로드 워커(DOWNLOAD_CONCURRENCY, 기본 9)가 항목마다 상태를 저장하고 Job 스레드·폴링
+      # API가 겹친다 — 기본 10으로는 모자란다. 동시성을 올리면 이 값도 함께 올릴 것.
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      # 저장은 밀리초 단위라 이걸 다 쓰면 풀 부족이 확정이다(기본 30초는 너무 늦게 드러난다).
+      connection-timeout: 10000
 
   jpa:
     hibernate:
@@ -30,7 +36,10 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+    # V1~V3를 V1 하나로 통합하면서 기존 DB는 이력 테이블을 지우고 이 기준선으로 넘어온다.
+    # 스키마가 이미 있고 이력만 없을 때만 동작하므로 빈 DB(테스트·신규)는 평소대로 V1을 적용한다.
     baseline-on-migrate: true
+    baseline-version: 1
 
 deployhub:
   work-dir: ${WORK_DIR:/data/deployhub/jobs}
@@ -56,12 +65,11 @@ deployhub:
     verify-on-register: ${REGISTRY_VERIFY_ON_REGISTER:true}
 
   # Microsoft Graph / OneDrive. SP_DRIVE_ID를 비우면 로그인한 계정의 기본 드라이브를 조회해 쓴다.
-  # 위임(delegated) 인증에서는 client-secret·site-id를 쓰지 않는다(app-only 복귀 대비로만 남김).
   sharepoint:
     tenant-id: ${GRAPH_TENANT_ID:}
     client-id: ${GRAPH_CLIENT_ID:}
-    client-secret: ${GRAPH_CLIENT_SECRET:}
-    site-id: ${SP_SITE_ID:}
+    # 사이트 문서 라이브러리의 driveId. 필수다(@NotBlank) — 비우면 기동이 실패한다.
+    # SP_ROOT_PATH는 그 라이브러리 루트 기준 상대 경로다.
     drive-id: ${SP_DRIVE_ID:}
     root-path: ${SP_ROOT_PATH:/Deploy/Packages}
     # 위임 인증용 refresh token 보관 파일. 최초 1회 device code 흐름으로 채워 넣는다.
@@ -74,29 +82,30 @@ deployhub:
     max-retries: ${MAX_RETRY:3}
     backoff: ${RETRY_BACKOFF:5s,15s,45s}
 
-  # Job 오케스트레이션. min-free-disk-bytes는 확정 시점의 경고 기준(기본 50GiB)일 뿐이고,
-  # 실제 필요 용량은 다운로드 단계가 매니페스트 크기로 따로 판정한다.
+  # Job 오케스트레이션. 필요 용량은 다운로드 단계가 매니페스트 크기로 판정한다.
   job:
     concurrency: ${JOB_CONCURRENCY:3}
-    min-free-disk-bytes: ${MIN_FREE_DISK_BYTES:53687091200}
 
-  # 매니페스트 조회 동시 요청 상한. manifestExecutor 풀 크기와 검증 배치 크기가 이 값 하나를
-  # 공유한다(NCR 전체가 나눠 쓰는 전역 상한). 튜닝 대상이 아니라 placeholder를 두지 않았을 뿐,
-  # relaxed binding으로 DEPLOYHUB_MANIFEST_CONCURRENCY 덮어쓰기는 여전히 가능하다.
+  # 매니페스트 조회 동시 요청 상한(= manifestExecutor 풀 크기). NCR 전체가 나눠 쓰는 전역 상한이다.
+  # 튜닝 대상이 아니라 placeholder를 두지 않았을 뿐, DEPLOYHUB_MANIFEST_CONCURRENCY로 덮어쓸 수 있다.
   manifest:
     concurrency: 5
 
-  # 다운로드. downloadExecutor 풀 크기가 JOB_CONCURRENCY × download.concurrency다.
+  # 다운로드. concurrency가 곧 서버 전체의 동시 skopeo 수 상한이다(Job별로 나누지 않는다).
   download:
-    concurrency: ${DOWNLOAD_CONCURRENCY:3}
+    concurrency: ${DOWNLOAD_CONCURRENCY:9}
     skopeo-timeout: ${SKOPEO_TIMEOUT:1800}
 
   # 업로드. 320 KiB(327680)의 배수여야 한다 — 아니면 UploadChunkSizeValidator가 기동을 막는다.
   upload:
-    chunk-size: ${UPLOAD_CHUNK_SIZE:10485760}
+    # Graph 상한인 60 MiB로 잡는다 — 청크마다 응답을 기다리므로 왕복 횟수가 곧 유휴 시간이다
+    # (10 GB 파일 기준 1,020회 → 170회). in-flight 힙은 이 값의 약 2.05배 × concurrency다(실측).
+    chunk-size: ${UPLOAD_CHUNK_SIZE:62914560}
+    # 서버 전체의 동시 업로드 수. 기본 3은 순차 시절의 실효 동시성과 같다(Job 3개 × 파일 1개).
+    concurrency: ${UPLOAD_CONCURRENCY:3}
     # 청크 PUT·업로드 세션 조회 전용 타임아웃(단위 없으면 초). spring.http.client.read-timeout(10초)은
-    # JDK 클라이언트에서 바디 전송까지 포함한 요청 전체의 데드라인이라 10 MiB 청크에 그대로 쓰면
-    # 지속 8.4 Mbps 미만에서 무조건 끊긴다. 300초면 하한이 약 0.27 Mbps가 된다.
+    # JDK 클라이언트에서 바디 전송까지 포함한 요청 전체의 데드라인이라 60 MiB 청크에 그대로 쓰면
+    # 지속 50 Mbps 미만에서 무조건 끊긴다. 300초면 하한이 약 1.7 Mbps가 된다.
     request-timeout: ${UPLOAD_REQUEST_TIMEOUT:300s}
 
   # 보존·정리 배치. days/count는 SharePoint 폴더에, local-cleanup-delay-hours는

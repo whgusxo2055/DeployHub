@@ -7,11 +7,13 @@ import static org.mockito.Mockito.when;
 
 import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
-import com.deployhub.common.ItemErrorCode;
 import com.deployhub.registry.ImageTagChecker.TagCheck;
 import com.deployhub.registry.NcrRegistryClient.ManifestInfo;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -20,7 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 /**
  * 등록 차단(E-0206)과 Job 검증(E-0501)이 공유하는 판정. {@code SubVersionRegistryCheckTest}는 이
  * 클래스를 통째로 mock하므로 여기 판정은 그쪽에서 한 줄도 실행되지 않는다 — 가장 틀리기 쉬운
- * 자리라 따로 고정한다. 실행기는 호출 스레드로 대체해 병렬성만 뺀다.
+ * 자리라 따로 고정한다. 실행기는 단일 스레드로 두어 병렬성만 뺀다.
  */
 @ExtendWith(MockitoExtension.class)
 class ImageTagCheckerTest {
@@ -30,8 +32,15 @@ class ImageTagCheckerTest {
     @Mock
     private NcrRegistryClient ncrRegistryClient;
 
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+
+    @AfterEach
+    void 실행기_정리() {
+        executor.shutdownNow();
+    }
+
     private ImageTagChecker checker() {
-        return new ImageTagChecker(ncrRegistryClient, Runnable::run, 5);
+        return new ImageTagChecker(ncrRegistryClient, executor);
     }
 
     /** 404만 "확실히 없음"이다 — 이 플래그가 등록을 차단할지 말지를 가른다. */
@@ -43,7 +52,7 @@ class ImageTagCheckerTest {
 
         assertThat(check.found()).isFalse();
         assertThat(check.definitelyMissing()).isTrue();
-        assertThat(check.failureCode()).isEqualTo(ItemErrorCode.IMAGE_NOT_FOUND);
+        assertThat(check.failureCode()).isEqualTo(ErrorCode.IMAGE_NOT_FOUND);
     }
 
     /** 타임아웃은 "확인 불가"다 — 확실히 없음으로 올리면 레지스트리 장애가 등록 불가로 번진다. */
@@ -54,7 +63,7 @@ class ImageTagCheckerTest {
         TagCheck check = checker().checkAll(List.of(TAG)).get(0);
 
         assertThat(check.definitelyMissing()).isFalse();
-        assertThat(check.failureCode()).isEqualTo(ItemErrorCode.MANIFEST_LOOKUP_TIMEOUT);
+        assertThat(check.failureCode()).isEqualTo(ErrorCode.MANIFEST_LOOKUP_TIMEOUT);
     }
 
     /**
@@ -68,7 +77,7 @@ class ImageTagCheckerTest {
         TagCheck check = checker().checkAll(List.of(TAG)).get(0);
 
         assertThat(check.definitelyMissing()).isFalse();
-        assertThat(check.failureCode()).isEqualTo(ItemErrorCode.MANIFEST_LOOKUP_UNAVAILABLE);
+        assertThat(check.failureCode()).isEqualTo(ErrorCode.MANIFEST_LOOKUP_UNAVAILABLE);
     }
 
     /** 자격증명 문제를 "이미지 없음"으로 뭉개면 운영자가 원인을 못 찾는다 — 이것만 올린다. */
@@ -85,10 +94,10 @@ class ImageTagCheckerTest {
     /** 형식 오류 메시지에 태그 원문이 실리면 무인증 응답으로 그대로 나간다. */
     @Test
     void 형식_오류는_코드가_정한_문구만_남긴다() {
-        TagCheck check = checker().checkAll(List.of("ACME/X:1")).get(0);
+        TagCheck check = checker().checkAll(List.of("acme/../../v2/other:1")).get(0);
 
-        assertThat(check.failureCode()).isEqualTo(ItemErrorCode.INVALID_IMAGE_TAG);
-        assertThat(check.failureCode().toErrorMessage()).doesNotContain("ACME/X");
+        assertThat(check.failureCode()).isEqualTo(ErrorCode.INVALID_IMAGE_TAG);
+        assertThat(check.failureCode().toMessage()).doesNotContain("acme/..");
     }
 
     /** PackageValidationService가 결과를 인덱스로 짝짓는다 — 순서가 밀리면 엉뚱한 항목이 실패한다. */

@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
@@ -30,7 +31,7 @@ import org.springframework.web.client.RestClient;
 class GraphFolderServiceTest {
 
     private static final GraphProperties PROPERTIES =
-            new GraphProperties("tenant", "client", "secret", "site-1", "drive-1", "/Deploy/Packages");
+            new GraphProperties("tenant", "client", "drive-1", "/Deploy/Packages");
     private static final String BASE = "https://graph.microsoft.com/v1.0";
 
     private MockRestServiceServer server;
@@ -45,14 +46,14 @@ class GraphFolderServiceTest {
         when(tokenService.getAccessToken()).thenReturn("token");
         RetryExecutor retryExecutor =
                 new RetryExecutor(new RetryProperties(1, List.of(Duration.ofMillis(1))), duration -> {});
-        GraphApiClient graphApiClient = new GraphApiClient(PROPERTIES, tokenService, retryExecutor, new ObjectMapper(), builder, builder);
+        GraphApiClient graphApiClient = new GraphApiClient(PROPERTIES, tokenService, retryExecutor, builder, builder);
         packageJobService = mock(PackageJobService.class);
         service = new GraphFolderService(graphApiClient, PROPERTIES, packageJobService, new ObjectMapper());
     }
 
     @Test
     void 폴더가_있으면_재사용하고_생성_요청을_보내지_않는다() {
-        String versionName = "2026.08.05";
+        String versionName = "2026.08.05.001";
 
         server.expect(requestTo(BASE + "/drives/drive-1/root:/Deploy/Packages/" + versionName))
                 .andExpect(method(HttpMethod.GET))
@@ -72,7 +73,7 @@ class GraphFolderServiceTest {
 
     @Test
     void 폴더가_없으면_상위_경로_밑에_생성한다() {
-        String versionName = "2026.08.06";
+        String versionName = "2026.08.06.001";
 
         server.expect(requestTo(BASE + "/drives/drive-1/root:/Deploy/Packages/" + versionName))
                 .andRespond(withStatus(HttpStatus.NOT_FOUND));
@@ -80,6 +81,10 @@ class GraphFolderServiceTest {
                 .andRespond(withSuccess("{\"id\":\"parent-1\"}", MediaType.APPLICATION_JSON));
         server.expect(requestTo(BASE + "/drives/drive-1/items/parent-1/children"))
                 .andExpect(method(HttpMethod.POST))
+                // 업로드 세션과 같은 이유로 키 순서를 고정한다 — 애노테이션이 먼저 와야 한다.
+                .andExpect(content().string(
+                        "{\"@microsoft.graph.conflictBehavior\":\"fail\",\"name\":\"%s\",\"folder\":{}}"
+                                .formatted(versionName)))
                 .andRespond(withSuccess("{\"id\":\"folder-2\",\"webUrl\":\"https://sp/folder-2\"}", MediaType.APPLICATION_JSON));
         server.expect(requestTo(BASE + "/drives/drive-1/items/folder-2/children?$top=999"))
                 .andRespond(withSuccess("{\"value\":[]}", MediaType.APPLICATION_JSON));
@@ -94,7 +99,7 @@ class GraphFolderServiceTest {
 
     @Test
     void 생성_중_409_충돌이면_재조회해서_재사용한다() {
-        String versionName = "2026.08.07";
+        String versionName = "2026.08.07.001";
 
         server.expect(requestTo(BASE + "/drives/drive-1/root:/Deploy/Packages/" + versionName))
                 .andRespond(withStatus(HttpStatus.NOT_FOUND));
@@ -117,7 +122,7 @@ class GraphFolderServiceTest {
 
     @Test
     void 공유_링크_발급이_거부되면_폴더_webUrl로_대체한다() {
-        String versionName = "2026.08.08";
+        String versionName = "2026.08.08.001";
 
         server.expect(requestTo(BASE + "/drives/drive-1/root:/Deploy/Packages/" + versionName))
                 .andRespond(withSuccess("{\"id\":\"folder-4\",\"webUrl\":\"https://sp/folder-4\"}", MediaType.APPLICATION_JSON));
@@ -133,7 +138,7 @@ class GraphFolderServiceTest {
 
     @Test
     void 재사용_시_기존_파일을_모두_지운다() {
-        String versionName = "2026.08.09";
+        String versionName = "2026.08.09.001";
 
         server.expect(requestTo(BASE + "/drives/drive-1/root:/Deploy/Packages/" + versionName))
                 .andRespond(withSuccess("{\"id\":\"folder-5\",\"webUrl\":\"https://sp/folder-5\"}", MediaType.APPLICATION_JSON));

@@ -1,7 +1,7 @@
 package com.deployhub.sharepoint;
 
 import com.deployhub.common.ApiException;
-import com.deployhub.common.ItemErrorCode;
+import com.deployhub.common.Concurrency;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
@@ -20,7 +20,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientResponseException;
@@ -45,6 +47,8 @@ public class GraphUploadService {
     private final ObjectMapper objectMapper;
     private final String workDir;
     private final long chunkSize;
+    // 동시 업로드 수는 이 풀의 고정 크기가 정한다 — 다운로드와 같은 패턴이다.
+    private final ExecutorService uploadExecutor;
 
     public GraphUploadService(
             PackageItemRepository packageItemRepository,
@@ -52,13 +56,15 @@ public class GraphUploadService {
             RetryProperties retryProperties,
             ObjectMapper objectMapper,
             @Value("${deployhub.work-dir}") String workDir,
-            @Value("${deployhub.upload.chunk-size:10485760}") long chunkSize) {
+            @Value("${deployhub.upload.chunk-size:62914560}") long chunkSize,
+            @Qualifier("uploadExecutor") ExecutorService uploadExecutor) {
         this.packageItemRepository = packageItemRepository;
         this.graphApiClient = graphApiClient;
         this.retryProperties = retryProperties;
         this.objectMapper = objectMapper;
         this.workDir = workDir;
         this.chunkSize = chunkSize;
+        this.uploadExecutor = uploadExecutor;
     }
 
     /**
@@ -73,33 +79,33 @@ public class GraphUploadService {
                         || item.getStatus() == PackageItemStatus.UPLOADED)
                 .toList();
 
-        boolean allSucceeded = true;
-        for (PackageItem item : targets) {
-            if (!uploadItemWithRetry(item, driveId, folderItemId)) {
-                allSucceeded = false;
-            }
-        }
-        if (!allSucceeded) {
+        List<Boolean> results = Concurrency.mapAll(
+                uploadExecutor, targets, item -> uploadItemWithRetry(item, driveId, folderItemId));
+        if (results.contains(Boolean.FALSE)) {
             throw new IllegalStateException("일부 항목 업로드에 실패했습니다.");
         }
     }
 
     private boolean uploadItemWithRetry(PackageItem item, String driveId, String folderItemId) {
+        // 이미지 태그 파싱
         ImageReference ref;
         try {
             ref = ImageReference.parse(item.getImageTag());
         } catch (IllegalArgumentException e) {
-            return failItem(item, ItemErrorCode.INVALID_IMAGE_TAG, e.getMessage());
+            return failItem(item, ErrorCode.INVALID_IMAGE_TAG, e.getMessage());
         }
+
+        // tar 파일 경로와 크기 확인
         String fileName = ref.tarFileName();
         Path tarPath = Path.of(workDir, item.getVersionName(), "images", fileName);
         long fileSize;
         try {
             fileSize = Files.size(tarPath);
         } catch (IOException e) {
-            return failItem(item, ItemErrorCode.UPLOAD_FILE_MISSING, e.getMessage());
+            return failItem(item, ErrorCode.UPLOAD_FILE_MISSING, e.getMessage());
         }
 
+        // 업로드 시도 루프 — 세션 소멸·권한 부족·토큰 발급 실패는 재시도해도 결과가 안 바뀌므로 바로 실패시킨다.
         int attempt = 0;
         while (true) {
             try {
@@ -135,7 +141,7 @@ public class GraphUploadService {
      * 그게 무인증 {@code GET /api/package-jobs/{versionName}} 응답으로 나간다. 원문은 호출자가
      * {@code detail}로 넘겨 로그에만 남긴다.
      */
-    private ItemErrorCode classifyFailure(RuntimeException e) {
+    private ErrorCode classifyFailure(RuntimeException e) {
         // 청크 재시도를 소진하고 올라온 타임아웃·5xx는 껍데기가 RetryableCallException이다 —
         // 벗기지 않으면 Graph 장애가 UPLOAD_UNAVAILABLE이 아니라 UPLOAD_FAILED로 기록된다.
         if (e instanceof RetryableCallException retryable) {
@@ -143,20 +149,23 @@ public class GraphUploadService {
         }
         if (e instanceof ApiException apiEx) {
             return switch (apiEx.getErrorCode()) {
-                case GRAPH_TOKEN_ISSUE_FAILED -> ItemErrorCode.UPLOAD_TOKEN_FAILED;
-                case GRAPH_FORBIDDEN -> ItemErrorCode.UPLOAD_FORBIDDEN;
-                case GRAPH_UNAVAILABLE -> ItemErrorCode.UPLOAD_UNAVAILABLE;
-                default -> ItemErrorCode.UPLOAD_FAILED;
+                case GRAPH_TOKEN_ISSUE_FAILED -> ErrorCode.GRAPH_TOKEN_ISSUE_FAILED;
+                case GRAPH_FORBIDDEN -> ErrorCode.GRAPH_FORBIDDEN;
+                case GRAPH_UNAVAILABLE -> ErrorCode.GRAPH_UNAVAILABLE;
+                default -> ErrorCode.UPLOAD_FAILED;
             };
         }
-        return ItemErrorCode.UPLOAD_FAILED;
+        return ErrorCode.UPLOAD_FAILED;
     }
 
     /** 호출될 때마다 새 세션을 만든다 — 재시도가 이 메서드를 다시 부르는 것만으로 세션 재생성이 된다. */
     private String uploadFile(String driveId, String folderItemId, String fileName, Path tarPath, long fileSize) {
+        // 업로드 세션 생성
         String uploadUrl = createUploadSession(driveId, folderItemId, fileName);
         long offset = 0;
-        int rangeMismatchRetries = 0;
+        long rangeMismatchBudget = MAX_RANGE_MISMATCH_RETRIES + fileSize / chunkSize + 1;
+        long rangeMismatches = 0;
+
         try (RandomAccessFile file = new RandomAccessFile(tarPath.toFile(), "r")) {
             while (offset < fileSize) {
                 long end = Math.min(offset + chunkSize, fileSize) - 1;
@@ -164,39 +173,41 @@ public class GraphUploadService {
                 GraphApiClient.ChunkUploadResult result = putChunkWithRetry(uploadUrl, chunk, offset, end, fileSize);
 
                 if (result.statusCode() == 416) {
-                    rangeMismatchRetries++;
-                    if (rangeMismatchRetries > MAX_RANGE_MISMATCH_RETRIES) {
-                        throw new IllegalStateException("E-1103: 업로드 범위가 반복해서 어긋납니다: " + fileName);
+                    // 방향으로 판정하면 상한이 안 걸린다 — 서버가 오프셋을 앞뒤로 흔들면 전진 리셋과
+                    // 후퇴가 번갈아 나며 영원히 돈다. 파일 단위 총량으로 센다: 정상 재개는 청크당
+                    // 한 번이면 충분하므로 청크 수 + 여유만큼만 허용하고, 성공해도 리셋하지 않는다.
+                    if (++rangeMismatches > rangeMismatchBudget) {
+                        throw new IllegalStateException(ErrorCode.UPLOAD_RANGE_MISMATCH.toLogMessage(fileName));
                     }
                     offset = refreshOffset(uploadUrl, offset);
                     continue;
                 }
                 if (result.statusCode() == 404 || result.statusCode() == 410) {
-                    throw new IllegalStateException("E-1102: 업로드 세션이 소멸했습니다: " + fileName);
+                    throw new IllegalStateException(ErrorCode.UPLOAD_SESSION_GONE.toLogMessage(fileName));
                 }
                 if (!result.success()) {
-                    throw new IllegalStateException(
-                            "E-1101: 업로드가 실패했습니다(status=%d): %s".formatted(result.statusCode(), fileName));
+                    throw new IllegalStateException("%s: 업로드가 실패했습니다(status=%d): %s"
+                            .formatted(ErrorCode.UPLOAD_FAILED.getCode(), result.statusCode(), fileName));
                 }
 
-                rangeMismatchRetries = 0;
                 offset = end + 1;
                 if (offset >= fileSize) {
-                    return extractWebUrl(result.body());
+                    return extractRequiredField(result.body(), "webUrl", "Graph 업로드 완료 응답");
                 }
             }
         } catch (IOException e) {
-            throw new IllegalStateException("E-1102: 업로드 대상 파일을 읽을 수 없습니다: " + tarPath.getFileName(), e);
+            throw new IllegalStateException(ErrorCode.UPLOAD_FILE_UNREADABLE.toLogMessage(tarPath.getFileName()), e);
         }
-        throw new IllegalStateException("E-1102: 업로드가 완료되지 않았습니다: " + fileName);
+        throw new IllegalStateException(ErrorCode.UPLOAD_INCOMPLETE.toLogMessage(fileName));
     }
 
     private String createUploadSession(String driveId, String folderItemId, String fileName) {
-        Map<String, Object> body =
-                Map.of("item", Map.of("@microsoft.graph.conflictBehavior", "replace", "name", fileName));
+        // conflictBehavior가 name보다 뒤로 가면 400이다 — GraphApiClient.orderedBody 참고.
+        Map<String, Object> body = Map.of(
+                "item", GraphApiClient.orderedBody("@microsoft.graph.conflictBehavior", "replace", "name", fileName));
         String response = graphApiClient.post(
                 "/drives/%s/items/%s:/%s:/createUploadSession".formatted(driveId, folderItemId, fileName), body);
-        return extractUploadUrl(response);
+        return extractRequiredField(response, "uploadUrl", "Graph 업로드 세션 응답");
     }
 
     /** 5xx·429는 같은 청크를 그대로 재전송한다. 429는 서버가 명시한 Retry-After를 우선한다. */
@@ -235,12 +246,14 @@ public class GraphUploadService {
         } catch (RestClientResponseException ex) {
             int code = ex.getStatusCode().value();
             if (code == 404 || code == 410) {
-                throw new IllegalStateException("E-1102: 업로드 세션이 소멸했습니다.");
+                throw new IllegalStateException(ErrorCode.UPLOAD_SESSION_GONE.toMessage());
             }
             throw ex;
         }
         try {
-            JsonNode ranges = objectMapper.readTree(status).path("nextExpectedRanges");
+            // 본문 없는 200이면 body(String.class)가 null이고 readTree(null)은 IAE다 —
+            // 아래 catch에 안 걸려 폴백 대신 예외가 나가고, 새 세션으로 파일 전체를 다시 올리게 된다.
+            JsonNode ranges = objectMapper.readTree(status == null ? "" : status).path("nextExpectedRanges");
             if (ranges.isArray() && !ranges.isEmpty()) {
                 return Long.parseLong(ranges.get(0).asText().split("-")[0]);
             }
@@ -257,14 +270,6 @@ public class GraphUploadService {
         return buffer;
     }
 
-    private String extractUploadUrl(String json) {
-        return extractRequiredField(json, "uploadUrl", "Graph 업로드 세션 응답");
-    }
-
-    private String extractWebUrl(String json) {
-        return extractRequiredField(json, "webUrl", "Graph 업로드 완료 응답");
-    }
-
     private String extractRequiredField(String json, String field, String context) {
         try {
             String value = objectMapper.readTree(json).path(field).asText(null);
@@ -277,7 +282,7 @@ public class GraphUploadService {
         }
     }
 
-    private boolean failItem(PackageItem item, ItemErrorCode errorCode, String detail) {
+    private boolean failItem(PackageItem item, ErrorCode errorCode, String detail) {
         return PackageItemFailure.fail(packageItemRepository, item, errorCode, detail);
     }
 

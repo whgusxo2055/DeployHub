@@ -30,14 +30,15 @@ import org.springframework.web.client.RestClientResponseException;
  *
  * <p><b>public client 흐름이라 {@code client_secret}을 보내지 않는다</b> — device code로 최초 1회
  * 로그인해 얻은 refresh token을 파일에 두고 그것만으로 갱신한다.
- * {@code GraphProperties.clientSecret}은 회사 테넌트(app-only) 복귀를 대비해 남겨둔 미사용 값이다.
  */
 @Slf4j
 @Service
 public class GraphTokenService {
 
     private static final Duration EARLY_REFRESH = Duration.ofMinutes(5);
-    private static final String SCOPE = "https://graph.microsoft.com/Files.ReadWrite offline_access";
+    // 사이트 문서 라이브러리는 로그인 계정 드라이브 밖이라 .All이 필요하다 — Files.ReadWrite로는 404다.
+    // scope를 바꾸면 저장된 refresh token이 무효라 device code 흐름을 다시 태우고 앱을 재기동해야 한다.
+    private static final String SCOPE = "https://graph.microsoft.com/Files.ReadWrite.All offline_access";
 
     private final GraphProperties properties;
     private final RetryExecutor retryExecutor;
@@ -80,8 +81,15 @@ public class GraphTokenService {
     }
 
     /** 401로 거부된 캐시 토큰을 무효화한다 — 다음 호출이 새로 발급받는다. */
-    public void invalidate() {
-        cached = null;
+    /**
+     * 401을 본 스레드가 무조건 비우면 다른 스레드가 방금 받은 정상 토큰까지 버린다 —
+     * Entra는 갱신마다 refresh token을 회전시키므로 그만큼 불필요한 회전이 늘어난다.
+     */
+    public void invalidate(String staleToken) {
+        CachedToken current = cached;
+        if (current != null && current.token().equals(staleToken)) {
+            cached = null;
+        }
     }
 
     private CachedToken requestToken() {

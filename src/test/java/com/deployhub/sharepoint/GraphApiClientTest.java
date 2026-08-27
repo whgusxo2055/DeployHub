@@ -15,7 +15,6 @@ import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -32,7 +31,7 @@ import org.springframework.web.client.RestClient;
 class GraphApiClientTest {
 
     private static final GraphProperties PROPERTIES =
-            new GraphProperties("tenant", "client", "secret", "site-1", null, "/Deploy/Packages");
+            new GraphProperties("tenant", "client", "drive-1", "/Deploy/Packages");
 
     private MockRestServiceServer server;
     private GraphTokenService tokenService;
@@ -45,29 +44,30 @@ class GraphApiClientTest {
         tokenService = mock(GraphTokenService.class);
         RetryExecutor retryExecutor =
                 new RetryExecutor(new RetryProperties(1, List.of(Duration.ofMillis(1))), duration -> {});
-        client = new GraphApiClient(PROPERTIES, tokenService, retryExecutor, new ObjectMapper(), builder, builder);
+        client = new GraphApiClient(PROPERTIES, tokenService, retryExecutor, builder, builder);
     }
 
     @Test
     void 응답이_401이면_토큰을_무효화하고_새_토큰으로_한번_재시도한다() {
         when(tokenService.getAccessToken()).thenReturn("stale-token", "fresh-token");
-        server.expect(requestTo("https://graph.microsoft.com/v1.0/me/drive/root"))
+        server.expect(requestTo("https://graph.microsoft.com/v1.0/drives/drive-1/root"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer stale-token"))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
-        server.expect(requestTo("https://graph.microsoft.com/v1.0/me/drive/root"))
+        server.expect(requestTo("https://graph.microsoft.com/v1.0/drives/drive-1/root"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer fresh-token"))
                 .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
 
         client.healthCheck();
 
-        verify(tokenService).invalidate();
+        // 실패한 그 토큰을 넘겨야 다른 스레드가 방금 받은 정상 토큰을 지우지 않는다.
+        verify(tokenService).invalidate("stale-token");
         server.verify();
     }
 
     @Test
     void 응답이_403이면_권한_부족으로_즉시_실패한다() {
         when(tokenService.getAccessToken()).thenReturn("token");
-        server.expect(requestTo("https://graph.microsoft.com/v1.0/me/drive/root"))
+        server.expect(requestTo("https://graph.microsoft.com/v1.0/drives/drive-1/root"))
                 .andRespond(withStatus(HttpStatus.FORBIDDEN));
 
         assertThatThrownBy(() -> client.healthCheck())
@@ -76,17 +76,16 @@ class GraphApiClientTest {
                 .isEqualTo(ErrorCode.GRAPH_FORBIDDEN);
     }
 
+    /** 헬스가 실제로 쓰는 드라이브를 봐야 한다 — /me/drive를 보면 쓰기가 전부 실패해도 초록으로 남는다. */
     @Test
-    void driveId_미설정이면_사이트_조회_결과를_한번만_호출해서_캐시한다() {
+    void 헬스체크는_설정된_드라이브를_본다() {
         when(tokenService.getAccessToken()).thenReturn("token");
-        server.expect(requestTo("https://graph.microsoft.com/v1.0/me/drive"))
-                .andRespond(withSuccess("{\"id\":\"drive-abc\"}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://graph.microsoft.com/v1.0/drives/drive-1/root"))
+                .andRespond(withSuccess("{\"id\":\"root\"}", MediaType.APPLICATION_JSON));
 
-        String first = client.resolveDriveId();
-        String second = client.resolveDriveId();
+        client.healthCheck();
 
-        assertThat(first).isEqualTo("drive-abc");
-        assertThat(second).isEqualTo("drive-abc");
+        assertThat(client.resolveDriveId()).isEqualTo("drive-1");
         server.verify();
     }
 
@@ -120,7 +119,7 @@ class GraphApiClientTest {
                 .andRespond(withSuccess("{\"id\":\"folder-1\"}", MediaType.APPLICATION_JSON));
 
         String response = client.post(
-                "/drives/d1/items/parent/children", Map.of("name", "2026.08.05", "folder", Map.of()));
+                "/drives/d1/items/parent/children", Map.of("name", "2026.08.05.001", "folder", Map.of()));
 
         assertThat(response).contains("folder-1");
     }

@@ -23,13 +23,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 @ExtendWith(MockitoExtension.class)
 class JobOrchestratorTest {
 
-    private static final String VERSION_NAME = "2026.08.18";
+    private static final String VERSION_NAME = "2026.08.18.001";
 
     @Mock
     private PackageJobService packageJobService;
-
-    @Mock
-    private PackageValidationService packageValidationService;
 
     @Mock
     private PackageDownloadService packageDownloadService;
@@ -45,10 +42,9 @@ class JobOrchestratorTest {
 
     @Test
     void 마지막_전이는_DONE_고정이_아니라_finish를_거친다() {
-        when(packageValidationService.validate(VERSION_NAME)).thenReturn(Map.of());
         when(graphFolderService.ensureFolder(VERSION_NAME)).thenReturn("folder-1");
 
-        orchestrator.start(VERSION_NAME);
+        orchestrator.startValidated(VERSION_NAME, Map.of());
 
         verify(packageJobService).finish(VERSION_NAME);
         verify(packageJobService, never()).changeStatus(VERSION_NAME, JobStatus.DONE);

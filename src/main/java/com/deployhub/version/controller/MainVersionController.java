@@ -1,5 +1,7 @@
 package com.deployhub.version.controller;
 
+import com.deployhub.common.ApiException;
+import com.deployhub.common.ErrorCode;
 import com.deployhub.common.PageResponse;
 import com.deployhub.version.dto.MainVersionCreateRequest;
 import com.deployhub.version.dto.MainVersionDetailResponse;
@@ -8,7 +10,7 @@ import com.deployhub.version.dto.MainVersionSummaryResponse;
 import com.deployhub.version.dto.MainVersionUpdateRequest;
 import com.deployhub.version.dto.PackagingEligibilityResponse;
 import com.deployhub.version.dto.SubVersionSavedResponse;
-import com.deployhub.version.dto.SubVersionUpsertBatchRequest;
+import com.deployhub.version.dto.SubVersionUpsertRequest;
 import com.deployhub.version.service.MainVersionService;
 import com.deployhub.version.service.SubVersionService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -30,7 +32,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 메인버전 CRUD와 메인버전 경로에 종속된 서브버전 일괄 등록. 서브버전을 자기 id로 다루는 작업은
+ * 메인버전 CRUD와 메인버전 경로에 종속된 서브버전 등록·수정. 서브버전을 자기 id로 다루는 작업은
  * {@link SubVersionController}가 맡는다 — URL 경로의 종속 여부로 나눴다.
  */
 @RestController
@@ -41,7 +43,7 @@ public class MainVersionController {
     private final MainVersionService mainVersionService;
     private final SubVersionService subVersionService;
 
-    @Operation(summary = "메인버전 등록")
+    @Operation(summary = "메인버전 등록 (직전 담당 영역 전건 PENDING 복사)")
     @ApiResponse(responseCode = "400", description = "E-0103: 요청 값 검증 실패")
     @ApiResponse(responseCode = "409", description = "E-0102: 이미 등록된 메인버전")
     @PostMapping("/api/main-versions")
@@ -58,19 +60,26 @@ public class MainVersionController {
         return mainVersionService.update(versionName, request);
     }
 
-    @Operation(summary = "서브버전 일괄 등록·수정 (컴포넌트 자동 생성)")
+    @Operation(summary = "서브버전 1건 등록·수정 (담당자용)")
     @ApiResponse(
             responseCode = "400",
-            description = "E-0205: 요청 값 검증 실패, E-0203: 메인버전 내 image_tag 중복,"
+            description = "E-0205: 요청 값 검증 실패(경로와 본문의 code 불일치 포함),"
+                    + " E-0203: 메인버전 내 image_tag 중복(먼저 소유한 code에서 빼야 한다),"
                     + " E-0206: 레지스트리에 없는 image_tag")
     @ApiResponse(responseCode = "404", description = "E-0101: 메인버전 없음")
     @ApiResponse(
             responseCode = "409",
             description = "E-0204: Job이 있는 메인버전은 수정 불가, E-0207: 동시 요청 충돌")
-    @PutMapping("/api/main-versions/{versionName}/sub-versions")
-    public List<SubVersionSavedResponse> upsertSubVersions(
-            @PathVariable String versionName, @Valid @RequestBody SubVersionUpsertBatchRequest request) {
-        return subVersionService.upsertAll(versionName, request.items());
+    @PutMapping("/api/main-versions/{versionName}/sub-versions/{code}")
+    public SubVersionSavedResponse upsertSubVersion(
+            @PathVariable String versionName,
+            @PathVariable String code,
+            @Valid @RequestBody SubVersionUpsertRequest request) {
+        if (!code.equals(request.code())) {
+            // 경로가 요청 범위를 못 박는다는 전제가 깨진다.
+            throw new ApiException(ErrorCode.SUB_VERSION_VALIDATION_FAILED, List.of("code=" + code));
+        }
+        return subVersionService.upsert(versionName, request);
     }
 
     @Operation(summary = "메인버전 목록 조회 (FN-01)")

@@ -67,7 +67,7 @@ class BeanWiringSmokeTest {
 
         @Bean
         GraphProperties graphProperties() {
-            return new GraphProperties("tenant", "client", "secret", "site", null, "/Deploy/Packages");
+            return new GraphProperties("tenant", "client", null, "/Deploy/Packages");
         }
 
         @Bean

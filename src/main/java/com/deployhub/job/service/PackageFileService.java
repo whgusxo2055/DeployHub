@@ -45,6 +45,11 @@ public class PackageFileService {
         PackageJob job = packageJobRepository.getOrThrow(versionName);
         List<PackageItem> items = packageItemRepository.findByVersionNameOrderByImageTagAsc(versionName);
 
+        // 정리된 Job에 "미완료"라고 답하면 호출측이 폴링하며 기다린다 — 파일은 영영 안 생긴다.
+        if (job.getStatus() == JobStatus.DELETED) {
+            throw new ApiException(
+                    ErrorCode.PACKAGE_ALREADY_CLEANED, List.of("deletedAt=" + job.getDeletedAt()));
+        }
         if (job.getStatus() != JobStatus.DONE) {
             PackageJobResponse progress = PackageJobResponse.of(job, items);
             throw new ApiException(

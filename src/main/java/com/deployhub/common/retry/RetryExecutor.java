@@ -30,6 +30,16 @@ public class RetryExecutor {
         this.sleeper = sleeper;
     }
 
+    /**
+     * 재시도 정책을 적용해 외부 호출을 실행한다. {@link RetryableCallException}이 던져지면
+     * {@link RetryProperties#maxRetries()}까지 재시도하고, 그 이상이면 {@link
+     * RetryableCallException#giveUpException()}을 던진다.
+     *
+     * @param operationName 로그에 표시할 호출 이름
+     * @param action 외부 호출을 수행하는 {@link Callable}
+     * @param <T> 외부 호출의 반환 타입
+     * @return 외부 호출의 반환값
+     */
     public <T> T execute(String operationName, Callable<T> action) {
         int attempt = 0;
         while (true) {

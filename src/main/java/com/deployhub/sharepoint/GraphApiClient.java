@@ -6,12 +6,11 @@ import com.deployhub.common.RelativePathGuard;
 import com.deployhub.common.retry.RetryAfterHeader;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryableCallException;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 import lombok.extern.slf4j.Slf4j;
@@ -41,9 +40,7 @@ public class GraphApiClient {
     private final RetryExecutor retryExecutor;
     private final RestClient restClient;
     private final RestClient uploadClient;
-    private final ObjectMapper objectMapper;
 
-    private volatile String resolvedDriveId;
 
     /**
      * {@code spring.http.client.read-timeout}(10초)은 JDK 클라이언트에서 <b>바디 전송을 포함한 요청
@@ -62,7 +59,6 @@ public class GraphApiClient {
             GraphProperties properties,
             GraphTokenService tokenService,
             RetryExecutor retryExecutor,
-            ObjectMapper objectMapper,
             RestClient.Builder builder,
             ClientHttpRequestFactoryBuilder<?> requestFactoryBuilder,
             ClientHttpRequestFactorySettings requestFactorySettings,
@@ -72,7 +68,6 @@ public class GraphApiClient {
                 properties,
                 tokenService,
                 retryExecutor,
-                objectMapper,
                 builder,
                 builder.clone()
                         .requestFactory(requestFactoryBuilder.build(
@@ -97,13 +92,11 @@ public class GraphApiClient {
             GraphProperties properties,
             GraphTokenService tokenService,
             RetryExecutor retryExecutor,
-            ObjectMapper objectMapper,
             RestClient.Builder builder,
             RestClient.Builder uploadBuilder) {
         this.properties = properties;
         this.tokenService = tokenService;
         this.retryExecutor = retryExecutor;
-        this.objectMapper = objectMapper;
         // 업로드 URL은 절대 URL이라 baseUrl이 없다. 같은 builder를 넘기는 테스트를 위해 먼저 만든다 —
         // 아래 baseUrl 대입이 같은 인스턴스를 바꿔도 이미 만들어진 클라이언트에는 영향이 없다.
         this.uploadClient = uploadBuilder.build();
@@ -124,6 +117,18 @@ public class GraphApiClient {
             }
             throw ex;
         }
+    }
+
+    /**
+     * 순서가 보장되는 요청 본문. <b>OData 인스턴스 애노테이션({@code @microsoft.graph.*})을 먼저
+     * 넣을 것</b> — 뒤로 가면 Graph가 400 invalidRequest를 준다(2026-08-21 실측).
+     */
+    public static Map<String, Object> orderedBody(Object... keyValues) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        for (int i = 0; i < keyValues.length; i += 2) {
+            body.put((String) keyValues[i], keyValues[i + 1]);
+        }
+        return body;
     }
 
     public String post(String path, Object body) {
@@ -190,43 +195,17 @@ public class GraphApiClient {
         }
     }
 
-    /** 위임 인증이라 사이트가 아니라 로그인한 계정의 드라이브를 본다. */
+    /** 실제로 쓰는 드라이브를 본다 — {@code /me/drive}를 보면 쓰기가 전부 실패해도 헬스가 초록으로 남는다. */
     public void healthCheck() {
-        get("/me/drive/root");
+        get("/drives/%s/root".formatted(resolveDriveId()));
     }
 
-    /** {@code SP_DRIVE_ID}가 없으면 로그인한 계정의 기본 드라이브를 조회해 메모리에 캐시한다. */
+    /**
+     * 사이트 문서 라이브러리의 driveId다. {@code SP_DRIVE_ID}가 필수라 조회할 것이 없다 —
+     * 이 값만 맞으면 폴더·업로드의 {@code /drives/{driveId}/…} 호출은 종류를 안 가린다.
+     */
     public String resolveDriveId() {
-        if (properties.driveId() != null && !properties.driveId().isBlank()) {
-            return properties.driveId();
-        }
-        String current = resolvedDriveId;
-        if (current != null) {
-            return current;
-        }
-        // ponytail: 락 안에서 네트워크 호출을 한다 — 드라이브 조회는 프로세스당 한 번이라 감당 가능하다.
-        synchronized (this) {
-            if (resolvedDriveId == null) {
-                resolvedDriveId = extractId(get("/me/drive"));
-            }
-            return resolvedDriveId;
-        }
-    }
-
-    private String extractId(String json) {
-        JsonNode node;
-        try {
-            node = objectMapper.readTree(json);
-        } catch (JsonProcessingException ex) {
-            log.warn("Graph drive 응답 파싱에 실패했습니다.", ex);
-            throw new ApiException(ErrorCode.GRAPH_UNAVAILABLE);
-        }
-        String id = node.path("id").asText(null);
-        if (id == null || id.isBlank()) {
-            log.warn("Graph drive 응답에 id가 없습니다.");
-            throw new ApiException(ErrorCode.GRAPH_UNAVAILABLE);
-        }
-        return id;
+        return properties.driveId();
     }
 
     /**
@@ -235,14 +214,15 @@ public class GraphApiClient {
      */
     private <T> T authenticated(String path, Function<String, T> call) {
         RelativePathGuard.requireRelative(path);
+        String token = tokenService.getAccessToken();
         try {
-            return call.apply(tokenService.getAccessToken());
+            return call.apply(token);
         } catch (RestClientResponseException ex) {
             if (ex.getStatusCode().value() != 401) {
                 throw classify(ex, path);
             }
             log.warn("Graph 인증 실패, 토큰을 무효화하고 한 번 재시도합니다.");
-            tokenService.invalidate();
+            tokenService.invalidate(token);
         } catch (ResourceAccessException ex) {
             throw timeoutRetryable(path, ex);
         }

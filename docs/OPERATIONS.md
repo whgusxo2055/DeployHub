@@ -14,14 +14,18 @@
 |---|---|---|
 | `WORK_DIR` | `/data/deployhub/jobs` | 아카이브가 쌓이는 곳. 디스크 여유의 기준이다 |
 | `NCR_ENDPOINT`·`NCR_ACCESS_KEY`·`NCR_SECRET_KEY` | — | 비어 있으면 **기동 실패**(`@NotBlank`) |
-| `GRAPH_TENANT_ID`·`GRAPH_CLIENT_ID`·`GRAPH_CLIENT_SECRET`·`SP_SITE_ID` | — | 동일 |
+| `GRAPH_TENANT_ID`·`GRAPH_CLIENT_ID` | — | 동일 |
+| `SP_DRIVE_ID` | — | **사이트 문서 라이브러리의 driveId. 비어 있으면 기동 실패**(`@NotBlank`). 폴백이 없다 |
+| `SP_ROOT_PATH` | `/Deploy/Packages` | 그 라이브러리 **루트 기준** 상대 경로. 실제 존재해야 한다(E-1002) |
 | `NCR_CLI_PATH` | `/usr/bin/skopeo` | 실행 불가면 기동 실패(E-0605) |
 | `STARTUP_CHECKS_ENABLED` | `true` | 끄면 NCR 도달성·skopeo·tar 점검을 건너뛴다. 운영에서 끄지 말 것 |
 | `SWAGGER_ENABLED` | `true` | 운영에서는 끄거나 nginx로 내부 IP만 허용 |
 | `CORS_ALLOWED_ORIGINS` | — | 프론트엔드 **브라우저 주소창**의 오리진이다(이 백엔드 IP가 아니다). 스킴 필수, 포트 와일드카드는 `:[*]` |
-| `UPLOAD_CHUNK_SIZE` | `10485760` | 320 KiB의 양의 배수 + 60 MiB 이하만 허용. 아니면 기동 실패(E-1108) |
-| `JOB_CONCURRENCY` | `3` | 동시 Job 수. skopeo 프로세스는 최대 `JOB_CONCURRENCY × DOWNLOAD_CONCURRENCY`개까지 뜬다 |
-| `MIN_FREE_DISK_BYTES` | `53687091200` (50GB) | 확정 시점 여유 공간 경고 기준 |
+| `UPLOAD_CHUNK_SIZE` | `62914560` | 320 KiB의 양의 배수 + 60 MiB 이하만 허용. 아니면 기동 실패(E-1108). 청크마다 응답을 기다리므로 작게 잡으면 왕복 유휴가 늘어난다 |
+| `UPLOAD_CONCURRENCY` | `3` | **서버 전체**의 동시 업로드 수. `DOWNLOAD_CONCURRENCY`와 같은 전역 풀이라 `JOB_CONCURRENCY`가 곱해지지 않는다 |
+| `JOB_CONCURRENCY` | `3` | 동시 Job 수. 큐(100)까지 차면 E-1502 |
+| `DOWNLOAD_CONCURRENCY` | `9` | **서버 전체**의 동시 skopeo 수 상한. Job별로 나누지 않아 Job 하나가 다 쓸 수 있다 |
+| `DB_POOL_SIZE` | `20` | Hikari 최대 커넥션. `DOWNLOAD_CONCURRENCY` + Job 스레드 + 폴링 API보다 커야 한다 — **동시성을 올리면 같이 올릴 것** |
 | `RETENTION_DAYS` | `90` | SharePoint 폴더 보존 기간. **1 미만이면 기동 실패** |
 | `RETENTION_COUNT` | `10` | 기한이 지나도 보호할 최근 건수. 음수면 기동 실패 |
 | `LOCAL_CLEANUP_DELAY_HOURS` | `24` | 업로드 완료 후 작업 디렉터리 삭제 유예 |
@@ -34,8 +38,13 @@
 **NCP Container Registry** — pull 전용이면 충분하다. 토큰 scope는
 `repository:<repo>:pull`과 `registry:catalog:*`만 쓰고, push는 하지 않는다.
 
-**Microsoft Graph** — `Sites.ReadWrite.All`(애플리케이션 권한, 관리자 동의 필요).
-`Files.ReadWrite.All`은 앱 전용 인증에서 `createUploadSession`을 지원하지 않으므로 쓸 수 없다.
+**Microsoft Graph** — 위임(delegated) 인증에 `Files.ReadWrite.All`이다. 사이트 문서 라이브러리는
+로그인 계정 드라이브 밖이라 `.All` 없이는 전 호출이 404다. 관리자 동의가 필요하고, `SP_DRIVE_ID`가
+가리키는 라이브러리에 그 계정의 쓰기 권한이 있어야 한다.
+
+토큰은 device code 흐름으로 한 번 받아 refresh token을 파일에 보관·회전한다(`SECRETS_DIR`).
+**scope를 바꾸면 기존 refresh token이 무효**라 device code를 다시 태우고 앱을 재기동해야 한다 —
+`GraphTokenService.readRefreshToken`이 파일보다 메모리 값을 우선하기 때문이다.
 
 권한과 **별개로** 테넌트가 `organization` 범위 공유 링크를 막고 있으면 링크 발급이 실패한다.
 그때는 폴더 `webUrl`로 폴백하고 Job은 완료시키되 경고(E-1005)로 남는다. 권한 신청 시
@@ -66,7 +75,7 @@ curl -X POST 'localhost:8080/api/admin/cleanup'
 curl -X POST 'localhost:8080/api/admin/cleanup?dryRun=false'
 
 # 특정 메인버전만 즉시 정리 (보호 규칙과 무관)
-curl -X DELETE 'localhost:8080/api/package-jobs/2026.08.05/package'
+curl -X DELETE 'localhost:8080/api/package-jobs/2026.08.24.001/package'
 ```
 
 `dryRun` 기본값이 `true`인 것은 의도다 — 인증이 없어 파라미터 없는 POST 한 방이 곧 실삭제가
@@ -76,13 +85,34 @@ curl -X DELETE 'localhost:8080/api/package-jobs/2026.08.05/package'
 2단계를 처리해도 여기 오르지 않으므로, 처리 여부는 `deleted_at`으로 확인한다.
 `failed`에 오른 건은 다음 배치가 자동으로 재시도한다.
 
-## 4. 오류 코드별 대응
+## 4. DB 마이그레이션
+
+스키마는 Flyway가 관리하고 Hibernate는 `ddl-auto: validate`로 검증만 한다. **적용된 마이그레이션
+파일은 고치지 않는다** — 주석 한 줄만 바뀌어도 이미 적용한 DB가 `Migration checksum mismatch`로
+기동을 못 한다. `MigrationImmutabilityTest`가 파일 CRC32를 고정해 로컬에서 먼저 잡는다.
+
+2026-08-27에 옛 V1~V3을 `V1__init_schema.sql` 하나로 통합했다. 통합본은 당시 서버
+`SHOW CREATE TABLE`을 그대로 재현한 것이라 **기존 DB의 스키마는 바뀌지 않는다**. 다만 이력
+테이블의 체크섬이 옛 V1의 것이라, 통합본을 처음 배포하는 기존 DB는 한 번만 재기준선이 필요하다.
+
+```sql
+-- 기존 DB에서 한 번만. 진행 중 Job이 없는지 GET /api/package-jobs로 먼저 확인하고,
+-- 반드시 docker compose stop app으로 앱을 멈춘 뒤에 지울 것 — 통합 전 jar가 살아 있으면
+-- baseline 직후 옛 V2·V3를 다시 적용하려다 죽는다(이미 적용된 ALTER라 실패한다).
+DROP TABLE flyway_schema_history;
+```
+
+지운 뒤 앱을 재기동하면 `baseline-on-migrate: true` + `baseline-version: 1`이 이력 테이블을
+새로 만들고 V1을 이미 적용된 것으로 기록한다(스키마가 비어 있지 않고 이력만 없을 때만 동작하므로
+빈 DB·테스트는 평소대로 V1을 적용한다). 스키마 자체는 건드리지 않으므로 데이터 손실이 없다.
+
+## 5. 오류 코드별 대응
 
 ### 기동이 안 될 때
 
 | 코드 | 원인 | 대응 |
 |---|---|---|
-| (기동 실패) | `NCR_*`/`GRAPH_*`/`SP_SITE_ID` 누락 | `@NotBlank` 검증이다. `.env` 확인 |
+| (기동 실패) | `NCR_*`/`GRAPH_TENANT_ID`/`GRAPH_CLIENT_ID` 누락 | `@NotBlank` 검증이다. `.env` 확인 |
 | E-0605 | skopeo 실행 불가 | `NCR_CLI_PATH` 확인. 컨테이너 이미지에는 포함돼 있다 |
 | E-0404 | NCR에 연결 불가 | 아래 "NCR 도달성" 참고 |
 | E-1108 | `UPLOAD_CHUNK_SIZE`가 320 KiB 배수가 아님 | 값 수정 |
@@ -93,18 +123,29 @@ curl -X DELETE 'localhost:8080/api/package-jobs/2026.08.05/package'
 | 코드 | 의미 | 대응 |
 |---|---|---|
 | E-0204 | 진행 중이거나 완료된 메인버전의 매니페스트 수정 시도 | 정상 차단. `FAILED`만 수정 가능 |
-| E-0302 | 이미 Job이 있음 | 재생성하려면 `force=true` |
-| E-0304 | 작업 디렉터리 여유 공간 부족 | 정리 배치를 수동 실행하거나 `MIN_FREE_DISK_BYTES` 재검토 |
+| E-0206 | 서브버전 등록 시점에 레지스트리에 없는 `image_tag` | 404(확실히 없음)에만 막는다. 사내망 차단 중에는 통과하므로 E-0308에서 다시 걸린다 |
+| E-0302 | 이미 Job이 있거나 진행 중 | 완료된 Job을 다시 돌리려면 패키지를 먼저 정리한다(`DELETE .../package`) |
 | E-0305 | `PENDING` 담당 영역 잔존 | 해당 영역의 Release History 제출을 기다린다 |
+| E-0308 | Job 생성·재시도 시점에 레지스트리에 없는 `image_tag` | 생성은 행을 만들지 않고 400으로 거절한다(직전 Job이 있으면 그대로 보존). 재시도는 항목에 사유를 남기고 Job을 FAILED로 되돌린다. `details`에 실패한 태그 목록 |
 | E-0401 | 레지스트리 인증 실패 | 액세스키 확인. **단 사내망 차단도 이 증상으로 보일 수 있다** |
 | E-0402·E-0404 | 레지스트리 타임아웃·연결 불가 | 네트워크. 아래 참고 |
 | E-0452 | Graph 권한 부족 | `Sites.ReadWrite.All` 관리자 동의 여부 확인 |
 | E-0453 | Graph 일시 장애 | `RETRY_BACKOFF`에 따라 자동 재시도. 지속되면 서비스 상태 확인 |
-| E-0501 | 이미지 없음 | `image_tag` 오타가 가장 흔하다. 등록 시점 검증은 하지 않는 설계다 |
+| E-0501 | 이미지 없음 | `image_tag` 오타가 가장 흔하다. 등록(E-0206)·Job 생성(E-0308)에서 먼저 걸리므로, 여기까지 왔다면 그 사이 태그가 지워진 경우다 |
 | E-0603 | digest 불일치 | 다운로드 도중 태그가 갱신된 경우. 재시도 |
+| E-0602 | 작업 디렉터리 생성 실패 / 디스크 부족 | `WORK_DIR` 마운트·권한과 여유 공간 확인 |
+| E-1001 | 폴더 생성 경합 후 재조회 실패 | `SP_ROOT_PATH` 경로 확인(후행 슬래시 주의). 반복되면 Graph 상태 확인 |
+| E-1002 | SharePoint 상위 경로 없음 | `SP_ROOT_PATH`가 실제 존재하는지 확인 |
+| E-1004 | 폴더명 규칙 위반 | `version_name`에 금지문자나 `..`가 들어간 경우. 등록 정규식 확인 |
+| E-1102 | 업로드 세션 소멸 / 파일 읽기 실패 / 미완료 | 재시도. 반복되면 로컬 tar와 Graph 세션 유효기간 확인 |
+| E-1103 | 업로드 범위가 반복해서 어긋남 | 세션 상태 조회가 오프셋을 못 준 경우. 재시도하면 새 세션으로 다시 올린다 |
+| E-1402 | 정리 배치가 건별로 건너뜀 | 로그의 사유 코드 확인. 진행 중(E-1404)·재실행(E-1405)은 정상 |
+| E-1403 | 작업 디렉터리 삭제 실패 | 파일 점유·권한. 다음 배치가 재시도한다 |
+| E-1501 | 기동 시 고아 Job을 FAILED로 정리 | 강제 종료 흔적. 해당 Job은 `/retry`로 복구 |
 | E-0702 | 완료/진행 중 Job 재시도 시도 | 정상 차단 |
-| E-0703 | 작업 디렉터리 소실 | `force=true`로 전체 재수집 |
+| E-0703 | 작업 디렉터리 소실 | 이 시점의 Job은 FAILED라 정리 없이 재생성(POST)하면 전건 재수집된다. 단 담당 영역이 그 사이 PENDING이 됐으면 E-0305로 막히니 제출을 먼저 기다린다 |
 | E-1201 | 아직 완료 전 | 응답 `details`에 현재 상태·진행률이 들어 있다 |
+| E-1202 | 정리된(DELETED) Job의 파일 목록 요청 | 산출물이 이미 삭제됐다. 폴링해도 안 생기니 재패키징할 것 |
 | E-1404 | 진행 중 Job의 패키지 정리 시도 | 정상 차단. Job 종료 후 재시도 |
 | E-1502 | 실행 대기열 포화 | `JOB_CONCURRENCY` 상한. 잠시 후 재요청 |
 
@@ -124,12 +165,18 @@ curl -sS -o /dev/null -D - https://<host>/v2/
 "앱만 고장난 것"으로 오판하기 쉽다. curl 성공만으로 확정하지 말고 skopeo나 앱으로 한 번 더
 확인할 것. 클라이언트 설정으로는 우회할 수 없다.
 
-## 5. 알려진 제약
+## 6. 알려진 제약
 
-- **Job 이력은 메인버전당 1건이다.** `package_job`의 PK가 `version_name`이라 `force` 재생성 시
-  이전 이력이 덮어써진다. 최소한의 흔적은 `audit` 로거가 남긴다(Job 생성자·매니페스트 구성·
-  강제 여부·정리 대상). 지금은 stdout으로 나가므로 **컨테이너를 재기동하면 소실된다** —
-  이력 보존이 실제 요구가 되면 별도 appender와 `package_job` 대리키가 정공법이다.
+- **업로드 in-flight 힙은 `UPLOAD_CONCURRENCY × UPLOAD_CHUNK_SIZE × 2.05`다.** 2.05배는 실측값으로,
+  `readChunk`의 `byte[]` 한 벌과 RestClient/JDK HttpClient의 전송 버퍼 한 벌이다(청크 크기·병렬도와 무관하게 일정).
+  기본값(3 × 60 MiB)이면 369 MiB, MaxHeap의 약 19%다. JVM에 `-Xmx`를 주지 않아 MaxHeap이 컨테이너 메모리의
+  1/4로 자동 결정되므로(7.9 GB 호스트에서 1,986 MiB), **호스트를 옮기거나 `mem_limit`을 넣으면 이 여유가 같이 바뀐다** —
+  60 MiB 청크 기준 `UPLOAD_CONCURRENCY`는 8을 넘기지 말 것.
+
+- **Job 이력은 메인버전당 1건이다.** `package_job`의 PK가 `version_name`이라 재생성 시
+  이전 이력이 덮어써진다. 최소한의 흔적은 서비스 로그가 남긴다(`job-created`·`package-purge`·
+  `cleanup-batch` 줄). 지금은 stdout으로 나가므로 **컨테이너를 재기동하면 소실된다** —
+  이력 보존이 실제 요구가 되면 `package_job` 대리키가 정공법이다.
 - **인증이 없다.** `/api/**` 전체가 무인증이고 CORS도 열려 있다. 사내망 격리를 전제로 수용한
   리스크이므로, NCP ACG에서 소스 IP를 반드시 제한한다.
 - **정리는 단일 인스턴스를 전제로 한다.** 여러 인스턴스를 띄우면 스케줄러가 같은 대상을

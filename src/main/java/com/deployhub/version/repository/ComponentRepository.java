@@ -12,7 +12,8 @@ public interface ComponentRepository extends JpaRepository<Component, ComponentI
 
     List<Component> findBySubVersionIdOrderBySortOrderAsc(Long subVersionId);
 
-    List<Component> findBySubVersionIdIn(Collection<Long> subVersionIds);
+    /** 정렬이 없으면 getDetail이 컴포넌트를 PK 순으로 돌려준다 — image_tag 대조가 _bin이라 대문자가 앞선다. */
+    List<Component> findBySubVersionIdInOrderBySortOrderAsc(Collection<Long> subVersionIds);
 
     /**
      * 메인버전 내 {@code image_tag} 유일성 검증용. 반드시 메인버전 범위로 한정할 것 —
@@ -25,15 +26,6 @@ public interface ComponentRepository extends JpaRepository<Component, ComponentI
             )
             """)
     List<Component> findByMainVersionName(@Param("mainVersionName") String mainVersionName);
-
-    /** 목록의 componentCount 집계용. */
-    @Query("""
-            SELECT COUNT(c) FROM Component c
-            WHERE c.subVersionId IN (
-                SELECT sv.id FROM SubVersion sv WHERE sv.mainVersionName = :mainVersionName
-            )
-            """)
-    long countByMainVersionName(@Param("mainVersionName") String mainVersionName);
 
     /** 목록 조회용 일괄 집계 — 항목마다 count를 치면 page size에 비례해 쿼리가 는다. */
     @Query("""

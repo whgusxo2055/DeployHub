@@ -45,3 +45,6 @@ bin/
 *.pem
 *.key
 build-remote/
+
+### Claude Code ###
+.claude/

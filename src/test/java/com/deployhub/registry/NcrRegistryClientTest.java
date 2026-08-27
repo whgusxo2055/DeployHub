@@ -12,7 +12,9 @@ import com.deployhub.common.ApiException;
 import com.deployhub.common.ErrorCode;
 import com.deployhub.common.retry.RetryExecutor;
 import com.deployhub.common.retry.RetryProperties;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.net.ConnectException;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
@@ -44,21 +46,58 @@ class NcrRegistryClientTest {
         server = MockRestServiceServer.bindTo(builder).build();
         RetryExecutor retryExecutor =
                 new RetryExecutor(new RetryProperties(1, List.of(Duration.ofMillis(1))), duration -> {});
-        client = new NcrRegistryClient(PROPERTIES, retryExecutor, builder);
+        // 프로덕션은 관대한 주입 매퍼지만 여기서는 일부러 엄격한 기본 매퍼를 쓴다 —
+        // TokenResponse의 @JsonIgnoreProperties가 사라지는 걸 잡는 유일한 가드다.
+        client = new NcrRegistryClient(PROPERTIES, retryExecutor, new ObjectMapper(), builder);
     }
 
     @Test
-    void v2_경로가_200이면_도달_가능으로_판단한다() {
-        server.expect(requestTo("https://ncr.example.com/v2/")).andRespond(withSuccess());
+    void 헬스체크는_Bearer_토큰까지_받아야_통과한다() {
+        server.expect(requestTo("https://ncr.example.com/v2/"))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
+                        .header(
+                                HttpHeaders.WWW_AUTHENTICATE,
+                                "Bearer realm=\"https://ncr.example.com/auth/token\",service=\"ncr\""));
+        server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr"))
+                .andRespond(withSuccess("{\"token\":\"tok-123\"}", MediaType.TEXT_PLAIN));
+        server.expect(requestTo("https://ncr.example.com/v2/"))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer tok-123"))
+                .andRespond(withSuccess());
 
-        assertThat(client.isReachable()).isTrue();
+        client.healthCheck();
+        server.verify();
     }
 
+    /** 연결 자체가 안 되는 건 "시간 초과"(E-0402)가 아니다 — 사내망 차단 진단이 여기서 갈린다. */
     @Test
-    void v2_경로가_401이어도_도달_가능으로_판단한다() {
-        server.expect(requestTo("https://ncr.example.com/v2/")).andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+    void 연결하지_못하면_헬스체크가_E_0404로_실패한다() {
+        server.expect(requestTo("https://ncr.example.com/v2/")).andRespond(request -> {
+            throw new ConnectException("Connection refused");
+        });
 
-        assertThat(client.isReachable()).isTrue();
+        assertThatThrownBy(() -> client.healthCheck())
+                .isInstanceOf(ApiException.class)
+                .extracting(e -> ((ApiException) e).getErrorCode())
+                .isEqualTo(ErrorCode.REGISTRY_UNREACHABLE);
+    }
+
+    /**
+     * 무인증 도달성만 보던 시절에는 키가 죽어도 healthy였다 — 그 오진이 첫 Job까지 숨는다.
+     * 토큰 발급이 401이면 헬스체크가 반드시 실패해야 한다.
+     */
+    @Test
+    void 자격증명이_틀리면_헬스체크가_E_0401로_실패한다() {
+        server.expect(requestTo("https://ncr.example.com/v2/"))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
+                        .header(
+                                HttpHeaders.WWW_AUTHENTICATE,
+                                "Bearer realm=\"https://ncr.example.com/auth/token\",service=\"ncr\""));
+        server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr"))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+
+        assertThatThrownBy(() -> client.healthCheck())
+                .isInstanceOf(ApiException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.REGISTRY_UNAUTHORIZED);
     }
 
     @Test
@@ -84,7 +123,7 @@ class NcrRegistryClientTest {
 
     @Test
     void 토큰_응답이_text_plain이고_미지의_필드가_있어도_파싱한다() {
-        // dev-ncr-sb 실측: NCR은 JSON을 담고도 Content-Type을 text/plain으로 주고,
+        // 사내 NCR 실측: NCR은 JSON을 담고도 Content-Type을 text/plain으로 주고,
         // 본문에 expires_in/issued_at을 함께 넣는다. 이 테스트가 없던 동안 나머지
         // 목킹이 전부 APPLICATION_JSON이라 실연동에서만 UnknownContentTypeException이 났다.
         server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))
@@ -142,6 +181,24 @@ class NcrRegistryClientTest {
                         .header(
                                 HttpHeaders.WWW_AUTHENTICATE,
                                 "Bearer realm=\"https://ncr.example.com/auth/token\",service=\"ncr\""));
+    }
+
+    @Test
+    void 토큰_엔드포인트의_5xx는_인증_실패가_아니라_재시도_대상이다() {
+        // auth 서비스 장애를 E-0401로 분류하면 RetryExecutor가 재시도하지 않고,
+        // ImageTagChecker가 401만 그대로 올리므로 Job 전체가 "인증 실패"로 죽는다.
+        // 재시도 대상이 되면 RetryExecutor가 maxRetries(1)만큼 더 돌고, 소진 후 giveUpException을 던진다.
+        for (int attempt = 0; attempt < 2; attempt++) {
+            expectChallenge();
+            server.expect(requestTo("https://ncr.example.com/auth/token?service=ncr"))
+                    .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+        }
+
+        assertThatThrownBy(() -> client.getManifest(new ImageReference("repo", "v1")))
+                .isInstanceOf(ApiException.class)
+                .extracting(ex -> ((ApiException) ex).getErrorCode())
+                .isEqualTo(ErrorCode.REGISTRY_TIMEOUT);
+        server.verify();
     }
 
     @Test

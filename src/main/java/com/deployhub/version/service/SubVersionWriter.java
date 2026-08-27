@@ -5,12 +5,12 @@ import com.deployhub.common.ErrorCode;
 import com.deployhub.version.dto.SubVersionSavedResponse;
 import com.deployhub.version.dto.SubVersionUpsertRequest;
 import com.deployhub.version.entity.Component;
+import com.deployhub.version.entity.MainVersion;
 import com.deployhub.version.entity.SubVersion;
+import com.deployhub.version.entity.SubmitStatus;
 import com.deployhub.version.repository.ComponentRepository;
 import com.deployhub.version.repository.MainVersionRepository;
 import com.deployhub.version.repository.SubVersionRepository;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -21,15 +21,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 서브버전 upsert의 <b>트랜잭션 구간</b>. {@link SubVersionService}에서 분리한 이유는 두 가지다.
- *
- * <p>① 레지스트리 조회(외부 HTTP, 최악 수십 초)를 트랜잭션 밖에 두기 위해서다. 같은 빈 안에서
- * 메서드를 나눠 불러도 프록시를 타지 않아 {@code @Transactional}이 걸리지 않는다.
- *
- * <p>② 진입 즉시 {@code main_version} 행에 비관적 락을 잡는다. 이 락은
- * {@code PackageJobService.create}와 <b>같은 행</b>을 대상으로 해서, "매니페스트 확정"과
- * "컴포넌트 수정"이 서로를 앞지르지 못하게 한다 — 없으면 두 트랜잭션이 각자 검사를 통과해
- * 확정된 매니페스트와 DB 매니페스트가 어긋난 채 패키징이 돈다.
+ * upsert의 <b>트랜잭션 구간</b>. 분리한 이유는 둘 — 레지스트리 조회를 트랜잭션 밖에 두려고(같은 빈
+ * 안에서 나눠 부르면 프록시를 안 탄다), 그리고 "매니페스트 확정"과 같은 행에 락을 잡으려고.
  */
 @Service
 @RequiredArgsConstructor
@@ -41,19 +34,21 @@ public class SubVersionWriter {
     private final ComponentRepository componentRepository;
     private final ManifestLockGuard manifestLockGuard;
 
-    public List<SubVersionSavedResponse> save(
-            String versionName, List<SubVersionUpsertRequest> requests, Map<String, List<String>> newTagsByCode) {
-        // 락을 먼저 잡는다 — 그 뒤의 검사와 저장이 하나의 직렬 구간이 된다.
-        mainVersionRepository
+    public SubVersionSavedResponse save(String versionName, SubVersionUpsertRequest request, List<String> tags) {
+        // 락을 먼저 잡는다 — 그 뒤의 검사와 저장이 하나의 직렬 구간이 된다. 경로 문자열이 아니라
+        // 조회된 정규 이름을 쓴다 — FK 대조가 ai_ci라 전각·ZWSP 표기가 그대로 저장될 수 있다.
+        String canonical = mainVersionRepository
                 .lockByVersionName(versionName)
+                .map(MainVersion::getVersionName)
                 .orElseThrow(() ->
                         new ApiException(ErrorCode.MAIN_VERSION_NOT_FOUND, List.of("versionName=" + versionName)));
-        // 락 획득 전에 Job이 생겼을 수 있어 여기서 한 번 더 본다(진입 시 검사는 빠른 실패용).
-        manifestLockGuard.assertNotLocked(versionName);
-        assertImageTagsUnique(versionName, newTagsByCode);
+        // 조회를 여기서 한 번만 한다 — 소유자 판정이 이 결과(=DB가 고른 행)를 그대로 써야 한다.
+        SubVersion existing =
+                subVersionRepository.findByMainVersionNameAndCode(canonical, request.code()).orElse(null);
+        assertImageTagsUnique(canonical, existing == null ? null : existing.getId(), tags);
 
         try {
-            return upsert(versionName, requests, newTagsByCode);
+            return upsert(canonical, existing, request, tags);
         } catch (DataIntegrityViolationException e) {
             // uk_sub_version_main_code / component PK 충돌. 락으로 대부분 막히지만 남는 경합은
             // 500(E-9000)이 아니라 "다시 시도하세요"로 돌려준다.
@@ -61,98 +56,86 @@ public class SubVersionWriter {
         }
     }
 
-    private List<SubVersionSavedResponse> upsert(
-            String versionName, List<SubVersionUpsertRequest> requests, Map<String, List<String>> newTagsByCode) {
-        List<SubVersionSavedResponse> responses = new ArrayList<>();
-        for (SubVersionUpsertRequest request : requests) {
-            SubVersion subVersion = subVersionRepository
-                    .findByMainVersionNameAndCode(versionName, request.code())
-                    .map(existing -> {
-                        existing.update(request.version(), request.note(), request.sortOrder());
-                        return existing;
-                    })
-                    .orElseGet(() -> subVersionRepository.save(SubVersion.builder()
-                            .mainVersionName(versionName)
-                            .code(request.code())
-                            .version(request.version())
-                            .note(request.note())
-                            .sortOrder(request.sortOrder())
-                            .build()));
+    private SubVersionSavedResponse upsert(
+            String versionName, SubVersion existing, SubVersionUpsertRequest request, List<String> tags) {
+        boolean isNew = existing == null;
+        SubVersion subVersion = isNew
+                ? subVersionRepository.save(SubVersion.builder()
+                        .mainVersionName(versionName)
+                        .code(request.code())
+                        .version(request.version())
+                        .note(request.note())
+                        .sortOrder(request.sortOrder())
+                        .build())
+                : existing;
 
-            List<Component> existingComponents =
-                    componentRepository.findBySubVersionIdOrderBySortOrderAsc(subVersion.getId());
-            List<String> tags = newTagsByCode.get(request.code());
-            // 컴포넌트만 바뀐 수정은 SubVersion.update가 "변경 없음"으로 보고 제출 상태를 그대로 둔다 —
-            // 여기서 되돌리지 않으면 제출한 적 없는 컴포넌트로 패키징이 통과한다(순서 변경도 변경이다).
-            if (!existingComponents.stream().map(Component::getImageTag).toList().equals(tags)) {
-                subVersion.resetSubmitStatus();
-            }
-            if (!existingComponents.isEmpty()) {
-                componentRepository.deleteAll(existingComponents);
-                // Hibernate는 같은 트랜잭션 내 INSERT를 DELETE보다 먼저 플러시한다 —
-                // 같은 image_tag를 다시 쓰면 PK 충돌이 나므로 먼저 비운다.
-                componentRepository.flush();
-            }
+        List<Component> existingComponents =
+                componentRepository.findBySubVersionIdOrderBySortOrderAsc(subVersion.getId());
+        // 순서 변경도 변경이다 — 여기서 놓치면 제출한 적 없는 컴포넌트로 패키징이 통과한다.
+        boolean changed = isNew
+                || subVersion.update(request.version(), request.note(), request.sortOrder())
+                || !existingComponents.stream().map(Component::getImageTag).toList().equals(tags);
 
-            int order = 0;
-            for (String tag : tags) {
-                componentRepository.save(Component.builder()
-                        .subVersionId(subVersion.getId())
-                        .imageTag(tag)
-                        .sortOrder(order++)
-                        .build());
-            }
+        // 값이 달라졌는데 "변경 없음"이면 요청자가 stale한 화면을 보고 있다는 뜻이다.
+        if (changed && request.submitStatus() == SubmitStatus.UNCHANGED) {
+            throw new ApiException(
+                    ErrorCode.SUB_VERSION_STATUS_CONTRADICTION, List.of("code=" + request.code()));
+        }
+        // 매니페스트를 실제로 건드릴 때만 확정 잠금을 적용한다 — 상태만 갱신하는 요청은 확정 후에도 허용한다.
+        if (changed) {
+            manifestLockGuard.assertNotLocked(versionName);
+        }
+        subVersion.changeSubmitStatus(request.submitStatus());
 
-            responses.add(SubVersionSavedResponse.builder()
-                    .id(subVersion.getId())
-                    .code(subVersion.getCode())
-                    .version(subVersion.getVersion())
-                    .note(subVersion.getNote())
-                    .sortOrder(subVersion.getSortOrder())
-                    .imageTags(tags)
+        if (!existingComponents.isEmpty()) {
+            componentRepository.deleteAll(existingComponents);
+            // Hibernate는 같은 트랜잭션 내 INSERT를 DELETE보다 먼저 플러시한다 —
+            // 같은 image_tag를 다시 쓰면 PK 충돌이 나므로 먼저 비운다.
+            componentRepository.flush();
+        }
+
+        int order = 0;
+        for (String tag : tags) {
+            componentRepository.save(Component.builder()
+                    .subVersionId(subVersion.getId())
+                    .imageTag(tag)
+                    .sortOrder(order++)
                     .build());
         }
-        return responses;
+
+        return SubVersionSavedResponse.builder()
+                .id(subVersion.getId())
+                .code(subVersion.getCode())
+                .version(subVersion.getVersion())
+                .note(subVersion.getNote())
+                .sortOrder(subVersion.getSortOrder())
+                .imageTags(tags)
+                .build();
     }
 
     /**
-     * 메인버전 내 image_tag 유일성을 검증한다(E-0203). 검증 범위는 이 메인버전으로 한정한다 —
-     * 다른 메인버전이 같은 태그를 공유하는 것은 변경 여부 판정이 성립하기 위한 정상 상태다.
-     *
-     * <p>DB에는 이 제약이 없다(PK가 {@code (sub_version_id, image_tag)}라 서브버전을 가로지르지
-     * 못한다) — 그래서 위 행 락이 이 검사의 원자성을 대신 보장한다.
+     * 메인버전 내 image_tag 유일성(E-0203). DB 제약으로 못 걸어(PK가 서브버전을 못 가로지른다) 위
+     * 행 락이 원자성을 대신한다. 요청 안의 중복은 {@code resolveImageTags}가 이미 거부했다.
      */
-    private void assertImageTagsUnique(String versionName, Map<String, List<String>> newTagsByCode) {
-        Map<String, String> tagOwner = new HashMap<>();
-
-        for (Map.Entry<String, List<String>> entry : newTagsByCode.entrySet()) {
-            for (String tag : entry.getValue()) {
-                String existingOwner = tagOwner.putIfAbsent(tag, entry.getKey());
-                if (existingOwner != null && !existingOwner.equals(entry.getKey())) {
-                    throw duplicateTagException(tag, existingOwner, entry.getKey());
-                }
-            }
-        }
-
-        Set<String> touchedCodes = newTagsByCode.keySet();
+    private void assertImageTagsUnique(String versionName, Long ownSubVersionId, List<String> tags) {
+        Set<String> newTags = Set.copyOf(tags);
         Map<Long, String> codeBySubVersionId =
                 subVersionRepository.findByMainVersionNameOrderBySortOrderAsc(versionName).stream()
                         .collect(Collectors.toMap(SubVersion::getId, SubVersion::getCode));
 
         for (Component existing : componentRepository.findByMainVersionName(versionName)) {
-            String ownerCode = codeBySubVersionId.get(existing.getSubVersionId());
-            if (ownerCode == null || touchedCodes.contains(ownerCode)) {
-                // 이번 배치가 재생성할 컴포넌트이므로 비교 대상에서 제외한다.
+            // code 문자열로 비교하면 안 된다 — sub_version.code는 ai_ci라 DB는 'CC'와 'cc'를 같은
+            // 행으로 고르는데 자바 equals는 갈라서, 자기 컴포넌트를 남의 것으로 보고 E-0203을 던진다.
+            if (existing.getSubVersionId().equals(ownSubVersionId)) {
                 continue;
             }
-            String existingOwner = tagOwner.putIfAbsent(existing.getImageTag(), ownerCode);
-            if (existingOwner != null && !existingOwner.equals(ownerCode)) {
-                throw duplicateTagException(existing.getImageTag(), existingOwner, ownerCode);
+            if (newTags.contains(existing.getImageTag())) {
+                throw new ApiException(
+                        ErrorCode.DUPLICATE_IMAGE_TAG,
+                        List.of(
+                                existing.getImageTag(),
+                                "code=" + codeBySubVersionId.get(existing.getSubVersionId())));
             }
         }
-    }
-
-    private ApiException duplicateTagException(String tag, String codeA, String codeB) {
-        return new ApiException(ErrorCode.DUPLICATE_IMAGE_TAG, List.of(tag, "code=" + codeA, "code=" + codeB));
     }
 }

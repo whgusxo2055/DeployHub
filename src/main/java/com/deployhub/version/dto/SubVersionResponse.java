@@ -14,5 +14,4 @@ public record SubVersionResponse(
         Integer sortOrder,
         String submitStatus,
         Instant submittedAt,
-        boolean changed,
         List<ComponentResponse> components) {}

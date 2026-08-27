@@ -37,11 +37,9 @@ public class PackageJob {
     @Column(name = "sp_folder_url", length = 500)
     private String spFolderUrl;
 
-    @Column(name = "created_by", length = 100, nullable = false)
-    private String createdBy;
-
     @Builder.Default
-    @Column(name = "created_at", nullable = false, updatable = false)
+    // updatable을 막지 않는다 — 재실행이 이 값을 갱신해야 소요 시간이 이번 실행 기준이 된다.
+    @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 
     @Column(name = "finished_at")
@@ -50,9 +48,12 @@ public class PackageJob {
     @Column(name = "deleted_at")
     private Instant deletedAt;
 
-    /** 매니페스트 보호에서 "진행 중이거나 완료된" Job인지 판정한다. FAILED만 예외다. */
+    /**
+     * 매니페스트 보호에서 "진행 중이거나 완료된" Job인지 판정한다. FAILED와 DELETED는 예외다 —
+     * 정리된 Job을 잠그면 {@code resolveJob}이 허용하는 재패키징을 매니페스트 수정 불가가 막는다.
+     */
     public boolean blocksManifestModification() {
-        return status != JobStatus.FAILED;
+        return status != JobStatus.FAILED && status != JobStatus.DELETED;
     }
 
     /**
@@ -61,6 +62,10 @@ public class PackageJob {
      * {@code deleted_at}을 단 채로 남아 정리 배치의 alive 필터에서 영구히 빠지고, 멀쩡한 URL이 "만료됨"으로 표시된다.
      */
     public void changeStatus(JobStatus next) {
+        // DELETED는 markDeleted()만 찍는다 — 여기로 오면 finishedAt이 정리 시각으로 덮어써진다.
+        if (next == JobStatus.DELETED) {
+            throw new IllegalArgumentException("DELETED는 markDeleted()로만 전이한다.");
+        }
         boolean terminal = next == JobStatus.DONE || next == JobStatus.FAILED;
         this.status = next;
         this.finishedAt = terminal ? Instant.now() : null;
@@ -71,22 +76,24 @@ public class PackageJob {
 
     /**
      * 재실행 시 기존 행을 초기화한다. {@code sp_folder_*}는 같은 이름 폴더를 재사용하므로 그대로 둔다.
-     * {@code createdAt}은 건드리지 말 것 — {@code updatable = false}라 대입해도 UPDATE에서 조용히 빠져
-     * 응답 DTO와 실제 저장값이 어긋난다.
+     * {@code createdAt}도 함께 갱신한다 — 컬럼 의미가 '요청 시각'이라 재실행이면 이번 요청 시각이 맞다.
+     * 안 바꾸면 최초 생성 시각이 남아 1시간짜리 실행이 며칠로 표기된다(2026-08-27 서버에서 163시간).
      */
-    public void resetForRerun(String createdBy) {
+    public void resetForRerun() {
         this.status = JobStatus.PENDING;
-        this.createdBy = createdBy;
+        this.createdAt = Instant.now();
         this.finishedAt = null;
         this.deletedAt = null;
     }
 
     /**
      * SharePoint 폴더를 지운 시각을 남긴다. 행도 {@code sp_folder_*}도 지우지 않는다 —
-     * 어느 폴더가 정리됐는지가 감사 흔적이다.
+     * 어느 폴더가 정리됐는지가 감사 흔적이다. {@code status}와 {@code deleted_at}은 항상 함께 움직인다
+     * ({@code changeStatus}의 비종료 전이와 {@code resetForRerun}이 둘 다 되돌린다).
      */
     public void markDeleted() {
         this.deletedAt = Instant.now();
+        this.status = JobStatus.DELETED;
     }
 
     /** 폴더 확보(생성 또는 재사용) 결과. 재사용이면 같은 값을 다시 써도 무해하다. */

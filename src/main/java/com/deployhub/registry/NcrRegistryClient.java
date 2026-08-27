@@ -11,6 +11,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -40,14 +41,10 @@ public class NcrRegistryClient {
 
     // OCI digest 문법(algorithm ":" encoded) — '/', '.', '?', '#', '{', '%'가 원천 배제된다.
     private static final Pattern DIGEST = Pattern.compile("[a-z0-9]+([.+_-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,}");
-    private static final Pattern PARAM = Pattern.compile("^(\\w+)\\s*=\\s*\"([^\"]*)\"$");
-    private static final Pattern BEARER_SCHEME = Pattern.compile("(?i)^bearer\\b\\s*(.*)$");
-    // 따옴표 안의 콤마는 챌린지 구분자로 보지 않는다 (WWW-Authenticate가 여러 scheme을
-    // 콤마로 이어붙일 수 있다: `Bearer realm="...", Basic realm="..."`).
-    private static final Pattern SPLIT_OUTSIDE_QUOTES = Pattern.compile(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
+    private static final Pattern BEARER_SCHEME = Pattern.compile("(?i)\\bbearer\\b");
+    private static final Pattern PARAM = Pattern.compile("(\\w+)\\s*=\\s*\"([^\"]*)\"");
 
-    // Boot 빈이 아니라 기본 설정 매퍼를 쓴다 — 미지의 필드에 실패하는 엄격 모드가 의도다(TokenResponse 참고).
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final String BASE_PATH = "/v2/";
     private static final String DIGEST_HEADER = "Docker-Content-Digest";
     // 단일 매니페스트 2종 + 인덱스 2종을 모두 보낼 것. 하나라도 빠지면 레지스트리가 있는 이미지를
     // 404(MANIFEST_UNKNOWN)로 돌려줘 "이미지 없음"으로 오판한다.
@@ -60,11 +57,17 @@ public class NcrRegistryClient {
 
     private final NcrProperties properties;
     private final RetryExecutor retryExecutor;
+    private final ObjectMapper objectMapper;
     private final RestClient restClient;
 
-    public NcrRegistryClient(NcrProperties properties, RetryExecutor retryExecutor, RestClient.Builder restClientBuilder) {
+    public NcrRegistryClient(
+            NcrProperties properties,
+            RetryExecutor retryExecutor,
+            ObjectMapper objectMapper,
+            RestClient.Builder restClientBuilder) {
         this.properties = properties;
         this.retryExecutor = retryExecutor;
+        this.objectMapper = objectMapper;
         this.restClient = restClientBuilder.baseUrl(resolveBaseUrl(properties.endpoint())).build();
     }
 
@@ -75,7 +78,6 @@ public class NcrRegistryClient {
 
     // ponytail: Bearer 토큰을 캐시하지 않아 매 호출이 401→토큰발급→재요청 3 RTT다.
     // 대량 순회가 병목이 되면 GraphTokenService 같은 만료 캐시를 붙일 것.
-    /** 인증된 GET 응답 본문. 실패 시 재시도 정책을 적용한다. */
     /**
      * 매니페스트의 digest와 레이어 크기 합계(무결성 대조·디스크 판정 기준값).
      * 404만 {@link Optional#empty()}로 돌려 호출자가 배치를 계속하게 하고, 나머지는 예외로 던진다.
@@ -255,44 +257,39 @@ public class NcrRegistryClient {
         return total;
     }
 
-    private static JsonNode readTree(String manifestJson) {
+    private JsonNode readTree(String manifestJson) {
         if (manifestJson == null || manifestJson.isBlank()) {
             return null;
         }
         try {
-            return OBJECT_MAPPER.readTree(manifestJson);
+            return objectMapper.readTree(manifestJson);
         } catch (Exception e) {
             log.warn("NCR 매니페스트 응답을 파싱할 수 없어 크기를 미상으로 처리합니다.", e);
             return null;
         }
     }
 
-    /** {@code GET /v2/} 도달성만 확인한다. 200/401 모두 "도달 가능"이다. */
-    public boolean isReachable() {
-        try {
-            restClient.get().uri("/v2/").retrieve().toBodilessEntity();
-            return true;
-        } catch (RestClientResponseException ex) {
-            return ex.getStatusCode().value() == 401;
-        } catch (ResourceAccessException ex) {
-            log.warn("NCR({})에 연결할 수 없습니다: {}", properties.endpoint(), ex.getMessage());
-            return false;
-        }
-    }
-
+    /**
+     * 도달성이 아니라 <b>자격증명</b>까지 본다 — 무인증 호출은 키가 죽어도 401이라 healthy로 보인다.
+     * 경로가 {@code /v2/}인 이유는 실측이다: scope 없는 토큰으로 {@code /v2/_catalog}는 403이고
+     * (챌린지에 scope가 없어 요청할 방법도 없다) pull 전용 키로는 기동이 통째로 막힌다.
+     */
     public void healthCheck() {
-        if (!isReachable()) {
+        try {
+            authenticated(BASE_PATH, auth -> restClient
+                    .get()
+                    .uri(BASE_PATH)
+                    .header(HttpHeaders.AUTHORIZATION, auth)
+                    .retrieve()
+                    .toBodilessEntity());
+        } catch (RetryableCallException e) {
+            // 헬스체크는 1회 호출이라 재시도로 감싸지 않는다 — 최종 오류를 그대로 노출한다.
+            throw e.giveUpException();
+        } catch (RestClientResponseException e) {
+            // classify가 401/403·5xx 외에는 원본을 그대로 돌려준다 — 그대로 새면 E-1101(500)이 되고
+            // 예외 메시지에 업스트림 응답 본문이 실린다.
             throw new ApiException(ErrorCode.REGISTRY_UNREACHABLE);
         }
-    }
-
-    private String doGet(String path, String authorizationHeader) {
-        return restClient
-                .get()
-                .uri(path)
-                .header(HttpHeaders.AUTHORIZATION, authorizationHeader)
-                .retrieve()
-                .body(String.class);
     }
 
     private String basicAuthHeader() {
@@ -350,7 +347,7 @@ public class NcrRegistryClient {
                     .body(String.class);
             // 본문이 JSON 리터럴 null이면 readValue가 null을 돌려준다 — 이어 붙이면 NPE가 나고
             // 그 NPE는 아래 catch 어디에도 안 걸려 배치를 통째로 중단시킨다.
-            TokenResponse parsed = body == null ? null : OBJECT_MAPPER.readValue(body, TokenResponse.class);
+            TokenResponse parsed = body == null ? null : objectMapper.readValue(body, TokenResponse.class);
             String token = parsed == null ? null : parsed.anyToken();
             if (token == null) {
                 log.warn("NCR Bearer 토큰 응답이 비어 있습니다.");
@@ -364,9 +361,17 @@ public class NcrRegistryClient {
             throw new ApiException(ErrorCode.REGISTRY_UNREACHABLE);
         } catch (RestClientResponseException ex) {
             log.warn("NCR Bearer 토큰 발급 실패: {}", ex.getStatusCode());
+            int status = ex.getStatusCode().value();
+            // auth 서비스 장애를 401로 뭉개면 재시도가 꺼지고, ImageTagChecker가 401만 그대로 올려
+            // 형제 태그 전체의 검증까지 중단된다 — 자격 증명 문제가 아닌 것은 재시도 대상이다.
+            if (status >= 500 || status == 429) {
+                throw new RetryableCallException(
+                        new ApiException(ErrorCode.REGISTRY_TIMEOUT),
+                        RetryAfterHeader.parseSeconds(ex.getResponseHeaders()));
+            }
             throw new ApiException(ErrorCode.REGISTRY_UNAUTHORIZED);
         } catch (ResourceAccessException ex) {
-            throw timeoutRetryable(realm, ex);
+            throw timeoutRetryable("token endpoint", ex);
         }
     }
 
@@ -383,51 +388,39 @@ public class NcrRegistryClient {
         return ex; // 404 등은 호출자가 자기 맥락으로 다시 분류한다.
     }
 
+    /**
+     * {@code ResourceAccessException}은 응답 지연과 연결 실패를 함께 싼다 — 원인으로 갈라야
+     * 사내망 TLS 차단·DNS 실패가 "시간 초과"(E-0402)로 둔갑하지 않는다.
+     */
     private RetryableCallException timeoutRetryable(String path, ResourceAccessException ex) {
-        log.warn("NCR 호출 시간 초과: {} ({})", path, ex.getMessage());
-        return new RetryableCallException(new ApiException(ErrorCode.REGISTRY_TIMEOUT));
+        // JDK 클라이언트는 연결·응답 지연 모두 HttpTimeoutException을 준다(실측). 연결 거부·DNS 실패는
+        // ConnectException, 사내망 TLS 차단은 SSLException이라 전부 "연결 불가"로 떨어진다.
+        boolean timedOut = ex.getCause() instanceof HttpTimeoutException;
+        log.warn("NCR 호출 실패({}): {} ({})", timedOut ? "시간 초과" : "연결 불가", path, ex.getMessage());
+        return new RetryableCallException(
+                new ApiException(timedOut ? ErrorCode.REGISTRY_TIMEOUT : ErrorCode.REGISTRY_UNREACHABLE));
     }
 
     /**
-     * Bearer challenge에 속한 파라미터만 추출한다. 헤더 하나에 여러 scheme이 이어질 수 있어
-     * 전체에 정규식을 돌리면 뒤 scheme의 realm이 앞을 덮어써 엉뚱한 호스트로 자격 증명이 간다.
+     * Bearer challenge의 파라미터. 앞선 scheme(`Basic realm="..."` 등)의 값을 realm으로 잘못
+     * 집지 않도록 Bearer 지점부터 훑고, 뒤따르는 scheme이 같은 이름을 다시 쓰면 먼저 온 값을 남긴다.
+     * 오파싱해도 realm 호스트 검사가 자격 증명 유출을 막지만, 그때 인증이 통째로 실패한다.
      */
     private static Map<String, String> parseBearerChallengeParams(String header) {
-        String[] segments = SPLIT_OUTSIDE_QUOTES.split(header);
-        Map<String, String> params = new LinkedHashMap<>();
-        int start = -1;
-        for (int i = 0; i < segments.length; i++) {
-            Matcher schemeMatcher = BEARER_SCHEME.matcher(segments[i].trim());
-            if (schemeMatcher.matches()) {
-                start = i;
-                String remainder = schemeMatcher.group(1);
-                if (!remainder.isBlank()) {
-                    tryAddParam(params, remainder);
-                }
-                break;
-            }
-        }
-        if (start == -1) {
+        Matcher scheme = BEARER_SCHEME.matcher(header);
+        if (!scheme.find()) {
             return Map.of();
         }
-        for (int i = start + 1; i < segments.length; i++) {
-            if (!tryAddParam(params, segments[i].trim())) {
-                break; // 다음 scheme(challenge)의 시작 - 여기서 멈춘다.
-            }
+        Map<String, String> params = new LinkedHashMap<>();
+        Matcher param = PARAM.matcher(header).region(scheme.end(), header.length());
+        while (param.find()) {
+            params.putIfAbsent(param.group(1), param.group(2));
         }
         return params;
     }
 
-    private static boolean tryAddParam(Map<String, String> params, String segment) {
-        Matcher matcher = PARAM.matcher(segment);
-        if (!matcher.matches()) {
-            return false;
-        }
-        params.put(matcher.group(1), matcher.group(2));
-        return true;
-    }
-
-    // NCR이 expires_in/issued_at도 함께 주는데 OBJECT_MAPPER가 엄격 모드라 이게 없으면 파싱이 깨진다.
+    // 주입 매퍼(Boot 빈)는 미지의 필드에 관대하지만, 그 설정에 기대지 않고 여기서 명시한다 —
+    // NCR은 expires_in/issued_at도 함께 준다.
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record TokenResponse(String token, String access_token) {
         String anyToken() {

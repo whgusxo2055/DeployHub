@@ -6,10 +6,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -52,6 +59,24 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    void 받을_수_없는_Accept는_ERROR_로그를_남기지_않는다() throws Exception {
+        // 상태코드는 수정 전에도 406이다(handleUnexpected가 만든 JSON을 못 실어 기본 리졸버로 떨어진다).
+        // 문제는 무인증 API에 Accept 헤더 하나로 ERROR + 스택트레이스가 쌓이는 것이라 로그로 단언한다.
+        Logger logger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            mockMvc.perform(get("/test/json").accept(MediaType.APPLICATION_PDF))
+                    .andExpect(status().isNotAcceptable());
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        assertThat(appender.list).noneMatch(event -> event.getLevel() == Level.ERROR);
+    }
+
+    @Test
     void 지원하지_않는_Content_Type은_415다() throws Exception {
         mockMvc.perform(post("/test/echo").contentType(MediaType.TEXT_PLAIN).content("name"))
                 .andExpect(status().isUnsupportedMediaType())
@@ -70,7 +95,7 @@ class GlobalExceptionHandlerTest {
     @Test
     void 표준_예외_응답에는_기본_문구만_실린다() throws Exception {
         mockMvc.perform(post("/test/echo").contentType(MediaType.APPLICATION_JSON).content("{\"name\":"))
-                .andExpect(jsonPath("$.message").value(ErrorCode.MALFORMED_REQUEST.getDefaultMessage()))
+                .andExpect(jsonPath("$.message").value(ErrorCode.MALFORMED_REQUEST.getMessage()))
                 .andExpect(jsonPath("$.details").isEmpty());
     }
 
@@ -80,6 +105,12 @@ class GlobalExceptionHandlerTest {
         @PostMapping(value = "/test/echo", consumes = MediaType.APPLICATION_JSON_VALUE)
         String echo(@Valid @RequestBody Payload payload) {
             return payload.name();
+        }
+
+        @org.springframework.web.bind.annotation.GetMapping(
+                value = "/test/json", produces = MediaType.APPLICATION_JSON_VALUE)
+        Payload json() {
+            return new Payload("ok");
         }
 
         @org.springframework.web.bind.annotation.GetMapping("/test/search")
