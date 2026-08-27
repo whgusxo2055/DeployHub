@@ -89,7 +89,9 @@ curl -X DELETE 'localhost:8080/api/package-jobs/2026.08.24.001/package'
 테이블의 체크섬이 옛 V1의 것이라, 통합본을 처음 배포하는 기존 DB는 한 번만 재기준선이 필요하다.
 
 ```sql
--- 기존 DB에서 한 번만. 진행 중 Job이 없는지 GET /api/package-jobs로 먼저 확인할 것.
+-- 기존 DB에서 한 번만. 진행 중 Job이 없는지 GET /api/package-jobs로 먼저 확인하고,
+-- 반드시 docker compose stop app으로 앱을 멈춘 뒤에 지울 것 — 통합 전 jar가 살아 있으면
+-- baseline 직후 옛 V2·V3를 다시 적용하려다 죽는다(이미 적용된 ALTER라 실패한다).
 DROP TABLE flyway_schema_history;
 ```
 

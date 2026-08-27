@@ -1,11 +1,12 @@
 # 저장소 구조
 
 - git 저장소 루트는 `/mnt/c/Project`가 아니라 `backend/`이다. git 명령은 `backend/`에서 실행할 것.
-- **원격 저장소(`whgusxo2055/DeployHub`)는 public이다.** 사내 호스트명(`dev-ncr-sb...`)·서버 IP·계정·실명 경로·보안장비 구성이 들어간 파일은 절대 커밋하지 말 것.
-- 이 파일은 git 추적 사본이다 — 저장소 밖의 `/mnt/c/Project/CLAUDE.md`가 원본이고, 거기엔 서버 IP·계정·실명 경로·보안장비 벤더명이 실값으로 들어 있다. 이 사본은 그 4종만 치환해 둔다(2026-08-21 결정, NCR 호스트명은 이미 public이라 치환 대상 아님). **여기에 실값을 되돌려 적지 말 것**, 그리고 원본을 고치면 이 파일도 같이 고칠 것(수동 동기화).
+- **원격 저장소(`whgusxo2055/DeployHub`)는 public이다.** 사내 호스트명(사내 NCR 호스트명)·서버 IP·계정·실명 경로·보안장비 구성이 들어간 파일은 절대 커밋하지 말 것.
+- `/mnt/c/Project/CLAUDE.md`(추적 밖)와 `backend/CLAUDE.md`(추적)는 **내용이 같다** — 한쪽을 고치면 다른 쪽도 같이 고칠 것(수동 동기화). **실명·서버 IP·계정·보안장비 벤더명·사내 호스트명은 어느 쪽에도 적지 않는다**(2026-08-27 결정, 종전에는 추적 밖 원본에 실값을 두었으나 전부 치환했다). 실값이 필요하면 `~/.ssh/config`와 `.env`에서 얻고 문서에는 `<ncr-host>` 같은 자리표시자를 쓸 것. 저장소명(`acme/*` 등)은 치환 대상이 아니다 — 기술 서술의 가독성을 위해 그대로 둔다.
 - `docker-compose.yml`/`.env`/`.env.example`도 같은 이유로 git 추적 밖이다. 이 파일들 변경은 커밋 대상이 아니다 — 필요하면 사용자에게 `git init` 여부를 먼저 물을 것.
-- **`dev-ncr-sb`는 이미 public에 올라가 있다** — 테스트 주석 3곳(`PackageJobDownloadFlowIntegrationTest` 2곳, `NcrRegistryClientTest` 1곳). 새로 넣지 말 것. 지워도 히스토리에는 남으므로 처리하려면 별도 판단이 필요하다.
+- **사내 NCR 호스트명은 이미 public에 올라가 있다** — 테스트 주석 3곳(`PackageJobDownloadFlowIntegrationTest` 2곳, `NcrRegistryClientTest` 1곳). 새로 넣지 말 것. 지워도 히스토리에는 남으므로 처리하려면 별도 판단이 필요하다.
 - 실물 검증 없이 미룬 이슈는 `backend/docs/DEFERRED.md`에 증상-원인-그때 할 일 순으로 적는다. 같은 지적이 리뷰에서 또 나오면 그 문서를 먼저 볼 것.
+- `구현계획서.md`의 세부 구현 메모는 요구사항이 아니다 — FN/REQ 번호와 "확정" 표기만 구속력이 있다. 실례: FN-09의 "파일별로 순차 업로드"는 구현 메모라 2026-08-27에 병렬로 뒤집었다.
 - 참고 문서: `/mnt/c/Project/구현계획서.md`(FN/REQ 번호·Phase·확정 사항), `backend/README.md`(요구사항·기동·`dev` 프로필), `backend/docs/OPERATIONS.md`(환경변수·외부 권한·오류코드별 대응), `backend/docs/DEFERRED.md`(알고도 미룬 것), `/mnt/c/Project/반입가이드.md`(고객사 반입 환경·검증 절차·실측 자료). FN 번호나 기동 절차를 추측하지 말고 여기서 확인할 것.
 - 패키지: `common`(ErrorCode·ApiException·재시도) · `config` · `health` · `registry`(NCR) · `sharepoint`(Graph 토큰·폴더·업로드) · `job`(Job 오케스트레이션·다운로드·정리) · `version`(메인/서브버전·컴포넌트·매니페스트 잠금).
 
@@ -19,6 +20,7 @@
 - 실행/실패 건수 집계 한 줄: `for k in tests failures errors skipped; do echo "$k: $(grep -oh "$k=\"[0-9]*\"" build/test-results/test/*.xml | grep -o '[0-9]*' | paste -sd+ | bc)"; done`
 - `gradlew test`가 `NoSuchFileException: build/test-results/.../in-progress-results-generic.bin`으로 죽으면 테스트 실패가 아니라 drvfs+V3 파일 잠금이다 — `rm -rf build/test-results build/reports/tests` 후 재실행하면 통과한다. 전체 스위트는 3~6분(25개 클래스/159건, 2026-08-18 기준). 부하에 따라 11분까지 늘어난 적 있다.
 - `spring.http.client.read-timeout`은 JDK 클라이언트에서 **요청 전체(바디 전송 포함) 데드라인**이다 — 소켓 read timeout이 아니다(`JdkClientHttpRequest`가 `completeOnTimeout`으로 건다). 머신 부하가 높으면 `TestRestTemplate`도 이 값을 물려받아 통합 테스트가 `HttpTimeoutException: Request cancelled`로 간헐 실패한다. 로직 실패로 오인하지 말 것.
+- `application.yml`에 이미 있는 키를 또 추가하면 Boot가 `DuplicateKeyException`으로 죽어 `@SpringBootTest`가 무더기로 컨텍스트 로딩 실패한다(2026-08-27, 50건). 부모 블록을 `grep -A N`으로 보면 뒷줄이 잘려 못 본다 — **키 이름을 직접** grep할 것.
 - 로컬 전체 스위트는 `timeout 600 ./gradlew test --offline`로 돌린다 — 기본 2분 제한에 걸리고, 의존성 조회가 붙으면 더 느려진다.
 - 그 전체 스위트는 Bash 도구의 600초 상한에도 걸린다 — `run_in_background`로 돌리고 종료 통보를 기다릴 것. 포그라운드는 10분에 잘려 gradle이 테스트 도중 죽는다(exit 143, 리포트 XML도 안 남아 집계가 빈다).
 - **원격 컴파일이 깨지면 `t.sh`가 서버에 남은 이전 `build/`를 그대로 회수해 집계가 초록으로 보인다** — BUILD FAILED인데 "실행 172건, 실패 0"이 찍힌다. 집계 전 로컬 `backend/build-remote`뿐 아니라 **서버의 `build/test-results`·`build/reports`도 지울 것**(`ssh devsrv 'rm -rf DeployHub/backend/build/test-results DeployHub/backend/build/reports'`).
@@ -31,7 +33,7 @@
 - Windows 사용자 홈 경로에 한글이 포함됨 (`C:\Users\<한글이름>(EnglishName)` 형태). WSL에서 cmd.exe/powershell.exe를 직접 호출해 이 경로를 다루면 출력이 깨지기 쉬우니, 가능하면 `/mnt/c/Users/...` 경로로 WSL bash에서 직접 접근할 것.
 - `gradlew.bat`을 WSL에서 직접 검증해야 할 때의 우회(한글 JAVA_HOME, 임시 wrapper `.bat`, Docker Desktop npipe)는 `/mnt/c/Project/환경삽질.md`.
 - WSL 셸의 `curl.exe`는 Windows 바이너리(`/mnt/c/WINDOWS/system32/curl.exe`, Schannel), `curl`은 `/usr/bin/curl`(OpenSSL)이다 — TLS 스택이 달라 같은 URL에서 결과가 갈린다. 네트워크 진단 전 `which curl`로 확인할 것.
-- NCR(`dev-ncr-sb.kr.ncr.ntruss.com`)은 사내망에서 보안 장비(TLS 검사)에 차단된다 — 443에서 TLS 핸드셰이크에 평문 HTTP가 돌아와 JSSE/skopeo/Schannel이 실패하고, WSL `curl`(OpenSSL)만 통과해 "정상"으로 오판하기 쉽다. 실물 검증은 휴대폰 테더링으로 전환해서 할 것. Conscrypt(BoringSSL)로 provider를 바꿔도 차단되므로 클라이언트 설정으로는 우회 불가.
+- NCR(`<ncr-host>`)은 사내망에서 보안 장비(TLS 검사)에 차단된다 — 443에서 TLS 핸드셰이크에 평문 HTTP가 돌아와 JSSE/skopeo/Schannel이 실패하고, WSL `curl`(OpenSSL)만 통과해 "정상"으로 오판하기 쉽다. 실물 검증은 휴대폰 테더링으로 전환해서 할 것. Conscrypt(BoringSSL)로 provider를 바꿔도 차단되므로 클라이언트 설정으로는 우회 불가.
 - NCR 실제 도달 여부는 무인증 `GET /v2/`의 응답 헤더로 1차 판별한다 — `HTTP/2 401` + `docker-distribution-api-version: registry/2.0` + `www-authenticate: Bearer realm="https://<host>/auth/token",service="ncr"`가 오면 도달이다(차단 시엔 평문 HTTP가 와서 HTTP/2 ALPN 협상 자체가 안 된다). 단 curl 성공만으로 확정하지 말고 skopeo나 JSSE로 한 번 더 확인할 것 — curl(OpenSSL)만 통과하는 게 정확히 예전 오판 패턴이다.
 - NCR blob 조회(`/v2/<repo>/blobs/<digest>`)는 307로 `kr.object.ncloudstorage.com`에 리다이렉트된다 — 그 서명 URL에 `Authorization`을 함께 보내면 403이다. 리다이렉트를 자동으로 따라가지 말고 직접 처리해 인증 헤더 없이 재요청할 것.
 - drvfs의 워킹트리가 CRLF로 뒤집히는 일이 있다 — 손댄 적 없는 파일 수십 개가 수정됨으로 잡히고 `git merge`가 abort된다. `git diff --ignore-cr-at-eol`이 비면 내용 변경이 0이라는 뜻이니 `git restore .`로 정리하면 된다. 재발하면 `.gitattributes`에 `* text=auto eol=lf` 한 줄이 근본 대책이다.
@@ -42,8 +44,10 @@
 - 서버 mysql 클라이언트 기본 문자셋이 latin1이라 `COLLATE utf8mb4_*` 비교가 `ERROR 1253`으로 죽는다 — `--default-character-set=utf8mb4`와 `_utf8mb4'...'` 리터럴을 쓸 것.
 - 이 셸에서 `grep`·`bc`·`paste`가 함수/셰임으로 덮여 `claude native binary not installed`를 뱉는 일이 있다 — `/usr/bin/grep`처럼 절대 경로로 우회하고, 집계는 `bc` 대신 awk로 할 것.
 
-# 테스트 서버 (dev-mng-img-test)
+# 테스트 서버
 
+- 서버 회선 실측(2026-08-27): 다운링크 424 MB/s, 업링크 **단일 스트림 109 MB/s / 3스트림 합계 127 MB/s**(병렬 이득 상한 약 16%), MS 엔드포인트 TCP 왕복 5 ms. 업로드는 단일 스트림이 이미 링크의 85%를 쓴다.
+- 대역폭 측정은 `speed.cloudflare.com/__up`에 `/dev/zero`를 POST한다 — `__down`은 403이고, 미러 파일 다운로드는 UA 헤더가 없으면 404다.
 - 사내망 NCR 차단을 우회하는 실물 검증용 서버. 접속은 ssh alias `devsrv`로만 적는다 — 실제 호스트·계정은 `~/.ssh/config`에 두고 여기에는 적지 않는다(ControlMaster 켜 둠). Ubuntu 24.04 / 2 vCPU / 7.8GB / 200G(185G 여유).
 - **IntelliJ 원격개발용이 아니라 테스트 러너 전용**이다 — 2코어에 원격 IDE 백엔드까지 올리면 Gradle과 CPU를 다툰다. 소스 원본은 로컬 WSL 한 벌이고 서버로는 한 방향 rsync만 한다(`--delete`라 서버에서 직접 편집하면 날아간다).
 - `/mnt/c/Project/t.sh` = rsync → 원격 `gradlew test` → 리포트를 `backend/build-remote/`로 회수 + 실제 실행/스킵 건수 출력. 인자는 gradlew에 그대로 전달된다.
@@ -88,7 +92,8 @@
 - JPA 비관적 락(`@Lock(PESSIMISTIC_WRITE)`)을 걸기 전에 같은 엔티티를 `findById` 등으로 먼저 조회하지 말 것 — Hibernate가 락 획득 후에도 1차 캐시의 stale 인스턴스를 그대로 반환해 락이 사실상 무력화된다. 존재 여부만 필요하면 `existsById`를 쓴다 (`PackageJobService.resolveJob` 참고).
 - `Executor`/`ThreadPoolTaskExecutor` `@Bean`을 하나라도 정의하면 Spring Boot의 기본 `applicationTaskExecutor` 자동 구성이 꺼진다(`@ConditionalOnMissingBean(Executor.class)`) — 이후 한정자 없는 `@Async`가 전부 그 전용 풀을 나눠 쓰게 된다. 새 `@Async`를 추가할 때는 반드시 실행기를 명시할 것 (`AsyncConfig`/`JobOrchestrator` 참고).
 - MySQL `DATETIME` 컬럼(타임존 정보 없음)을 테스트에서 검증할 때, 원시 JDBC `Timestamp` 읽기와 Hibernate `Instant` 매핑은 변환 경로가 달라 값이 갈릴 수 있다 — 같은 경로(둘 다 API 응답, 또는 둘 다 JDBC)로 읽은 값끼리만 비교할 것.
-- 매니페스트 `Accept`에는 단일 매니페스트 2종(docker v2 schema2, oci image manifest)에 더해 **인덱스 2종(oci image index, docker manifest list)까지** 넣을 것 — 빠지면 레지스트리가 사유를 명시한 404를 준다("OCI index found, but accept header does not support OCI indexes"). `getManifest`는 404를 `Optional.empty()`로 처리하므로 있는 이미지가 조용히 "없음"이 된다(E-0501 오탐). dev-ncr-sb 실측 기준 저장소 12개 중 3개가 인덱스였다 (`NcrRegistryClient.MANIFEST_ACCEPT` 참고).
+- `ImageTagChecker` 판정은 **3갈래**다 — found / 404 확답(`definitelyMissing`) / **확인 불가**(타임아웃·연결 실패·형식 오류). 셋째는 `PackageValidationService.check()`가 context에도 missing에도 안 넣어, 다운로드에서 `manifestContext.get(tag)`이 **null**이 되고 즉석 재조회로 넘어간다. "재시도 재개 경로"가 아니다.
+- 매니페스트 `Accept`에는 단일 매니페스트 2종(docker v2 schema2, oci image manifest)에 더해 **인덱스 2종(oci image index, docker manifest list)까지** 넣을 것 — 빠지면 레지스트리가 사유를 명시한 404를 준다("OCI index found, but accept header does not support OCI indexes"). `getManifest`는 404를 `Optional.empty()`로 처리하므로 있는 이미지가 조용히 "없음"이 된다(E-0501 오탐). 사내 NCR 실측 기준 저장소 12개 중 3개가 인덱스였다 (`NcrRegistryClient.MANIFEST_ACCEPT` 참고).
 - 반입용 아카이브는 **순수 `oci-archive:`**다 — `skopeo copy --preserve-digests --multi-arch all`. 압축이 유지돼 산출물이 레지스트리 원본 크기와 같고(`docker-archive:`는 1.76~3.37배로 불어남), 아카이브 digest가 레지스트리 digest와 **정확히 일치**한다. 구버전 Docker 미지원 결정(2026-08-11)에 따라 레거시 `manifest.json` 덧붙이기(하이브리드)는 제거했다.
 - **포맷을 강제하지 말 것** — `--format v2s2`를 고정하면 인덱스에 붙은 buildx 어테스테이션에서 `Unknown media type ... vnd.in-toto+json`으로 죽는다(NCR 12개 중 3개가 해당). `--preserve-digests`는 포맷을 강제하는 대신 원본 형식을 유지해 schema2·OCI 인덱스 양쪽을 다 만족시킨다.
 - **`--multi-arch all`이 필수다** — 빠지면 skopeo가 인덱스를 플랫폼 하나로 평탄화해 담아 아카이브 digest가 인덱스 digest와 달라진다(무결성 대조가 항상 오탐). 붙이면 인덱스가 통째로 보존된다(`cids` 4.4G 실측 일치).
@@ -96,6 +101,7 @@
 - 네임스페이스 없는 저장소명(`cids`·`ocr`·`piids`·`pips` 4개)은 `docker.io/library/<이름>`으로 적을 것 — Docker Hub 정규형이 그것이라, `docker.io/cids`처럼 적으면 조회 시 `docker.io/library/cids`로 정규화돼 **호스트를 아예 안 붙였을 때와 똑같은 증상**이 난다(행 2개 + 이름으로 사용 불가). `acme/<name>` 8개는 그대로 `docker.io/acme/<name>`이면 된다. 표시 이름에는 영향 없다(Docker가 `docker.io/library/`를 표시에서 뗀다). **schema2 단일 매니페스트로만 검증하면 이 버그를 놓친다** — NCR에서 네임스페이스 없는 4개 중 3개가 인덱스라 두 조건이 겹쳐 보이지만, 원인은 인덱스가 아니라 네임스페이스 유무다(7MB 이미지로 분리 확인).
 - 그 호스트에 **실 NCR 엔드포인트를 쓰면 안 된다** — 아카이브는 SharePoint를 거쳐 고객사로 나가므로 사내 레지스트리 주소가 실린다. `docker.io`를 명시하면 정규화 결과와 같아져 이름이 살아나고, `docker images`가 `docker.io/` 접두사를 표시에서 떼므로 고객사가 보는 이름은 `acme/x:1.0` 그대로다(실측).
 - 고객사 반입 환경(containerd 저장소 하한, 저장소 방식 전환 증상, 이름 정규화로 생기는 오적재)과 skopeo/`docker pull` 선택 근거는 `/mnt/c/Project/반입가이드.md`에 있다 — 반입 판단은 그 문서를 먼저 볼 것.
+- skopeo는 진행 상황을 **stdout**으로 쓴다 — stderr는 성공 시 **0바이트**, 실패 시 fatal 한 줄(약 200바이트)뿐이다(실측: 12개 인덱스/293MB 복사에 stdout 6,126B·stderr 0B). `runSkopeo`가 stdout을 `Redirect.DISCARD`로 버리므로 `STDERR_CAPTURE_LIMIT`(8192)은 실측 최악의 약 40배 여유다.
 - 외부 프로세스 출력을 `getInputStream().readAllBytes()`로 읽은 뒤 `waitFor(timeout)`을 부르면 타임아웃이 무력화된다 — EOF는 프로세스가 끝나야 오므로 읽기에서 무한정 막히고, 뒤의 `waitFor`는 이미 끝난 프로세스를 확인할 뿐이다. 별도 리더 스레드로 비우면서 `waitFor`할 것 (`runSkopeo` 참고).
 - 인덱스 응답에는 `layers`가 없어 크기 합계가 0이 된다 — 자식 매니페스트를 **전부** 조회해 합산할 것. `--multi-arch all`로 받으므로 buildx 어테스테이션(`platform`이 unknown/unknown)도 아카이브에 담기니 빼면 안 된다. 반환 digest는 태그가 가리키는 인덱스 digest를 그대로 둔다(skopeo 비교 대상과 같아야 함).
 - 무결성은 **서로 다른 두 질문**이라 검사도 둘이다. ①"받는 도중 원본이 바뀌었나"(같은 태그 재푸시) → 다운로드 전/후 모두 REST로 매니페스트를 재조회해 비교(E-0603). ②"아카이브가 충실한 복사본인가" → skopeo가 copy 중 blob마다 digest를 검증하고 `--preserve-digests`가 보존 실패 시 0이 아닌 코드로 끝내므로 이미 담보된다. 아카이브를 다시 열어 대조하지 말 것 — 파일 전체를 훑게 되고, ②는 이미 커버된다.
@@ -136,7 +142,7 @@
 - 시크릿·인증·API 엔드포인트를 다루면 `security-review` 스킬(또는 `everything-claude-code:security-reviewer`)도 돌린다.
 - 서브에이전트 리뷰 결과는 **사실 주장을 실측한 뒤** 반영한다 — 특히 "프레임워크가 X를 한다"류는 임시 테스트로 재현해 볼 것(검증용 테스트는 `src/test/.../scratch/`에 만들고 확인 후 삭제, 검증용 `.bat`과 같은 취급). 실제로 이번 보안 리뷰의 MEDIUM 1건이 오탐이었다.
 - 동작을 바꾸는 수정에 회귀 테스트를 붙일 땐 **수정 전 코드에서 그 테스트가 실제로 실패하는지 먼저 확인**한다 — 통과만 확인하면 아무것도 안 잡는 가짜 안전망이 남는다.
-- 그 확인에서 **테스트 픽스처가 실제 구성과 다르면 단언이 헛돈다**. 실례: digest 보존 회귀 테스트를 붙였는데 로컬 `registry:2` 시딩이 alpine(OCI 형식)을 그대로 밀어 넣어 변환이 애초에 없었고, `--preserve-digests`를 빼도 통과했다. 시딩을 `--format v2s2`로 바꾸니 그제서야 실패했다 — dev-ncr-sb도 12개 중 9개가 schema2라 이쪽이 실제 구성이다.
+- 그 확인에서 **테스트 픽스처가 실제 구성과 다르면 단언이 헛돈다**. 실례: digest 보존 회귀 테스트를 붙였는데 로컬 `registry:2` 시딩이 alpine(OCI 형식)을 그대로 밀어 넣어 변환이 애초에 없었고, `--preserve-digests`를 빼도 통과했다. 시딩을 `--format v2s2`로 바꾸니 그제서야 실패했다 — 사내 NCR도 12개 중 9개가 schema2라 이쪽이 실제 구성이다.
 - 검사를 **약화시켜** 확인할 때는 컴파일이 깨지지 않는 형태로 할 것 — 깨지면 XML이 아예 안 생겨 집계가 0건이 되고 "실패 없음"으로 오판한다(실례: `Files.size`를 `Files.exists`로 바꾸니 `catch (IOException)`이 도달 불가가 돼 `compileJava FAILED`). `Files.size(...) >= 0`처럼 바꾸고 로그의 `compileJava` 성공 여부를 먼저 볼 것.
 - 코드베이스 전 범위 리뷰는 모듈별(`registry`/`sharepoint`/`job`/`version`/공통기반)로 나눠 병렬로 돌린다 — 한 번에 시키면 훑고 지나간다. 각 프롬프트에 그 모듈의 실측 사실(이 파일의 항목들)을 함께 넣을 것.
 - "수정 전 실패 확인"은 `git stash` 말고 손으로 되돌릴 것 — 워킹트리에 커밋 안 된 작업이 쌓여 있으면 `git stash push -- <파일>`이 그 파일의 **다른 변경까지** 전부 HEAD로 되돌린다.
@@ -146,12 +152,12 @@
 
 - 실제 NCR로 검증할 때는 **pull만** 한다 — 토큰 scope는 `repository:<repo>:pull`/`registry:catalog:*`만, skopeo 목적지는 로컬 아카이브 tar로만 잡는다. 레지스트리 push 금지.
 - NCR 수동 조회는 Bearer 토큰 흐름을 타야 한다 — `/v2/_catalog`에 Basic만 보내면 `UNAUTHORIZED`다. 토큰 realm은 `/v2/token`이 아니라 `https://<host>/auth/token?service=ncr&scope=...`이다(`/v2/token`은 405). `/v2/`에 무인증 요청해 `WWW-Authenticate` 헤더로 확인할 수 있다.
-- `dev-ncr-sb` 저장소 이름에는 네임스페이스가 붙는 것과 안 붙는 것이 섞여 있다 — 8개는 `acme/<name>`, 4개(`cids`·`ocr`·`piids`·`pips`)는 접두사가 없다. 이름을 추측하지 말고 `_catalog`로 먼저 확인할 것(틀리면 `repository name not known to registry`).
+- 사내 NCR 저장소 이름에는 네임스페이스가 붙는 것과 안 붙는 것이 섞여 있다 — 8개는 `acme/<name>`, 4개(`cids`·`ocr`·`piids`·`pips`)는 접두사가 없다. 이름을 추측하지 말고 `_catalog`로 먼저 확인할 것(틀리면 `repository name not known to registry`).
 - 수동 검증용 자격증명은 루트 `.env`에서 읽고 argv에 넣지 말 것 — curl은 `-K <0600 설정파일>`, skopeo는 `REGISTRY_AUTH_FILE`을 쓰고 끝나면 삭제한다(`ps`/`/proc/<pid>/cmdline` 노출 방지).
 - NCR은 **없는 저장소·없는 태그 모두 404**를 준다(401 아님) — 등록 시점 존재 검증(E-0206)이 성립하는 근거다. 2026-08-13 실측.
 - Graph 인증 문제는 **항상 401**이다 — 헤더 없음·빈 값·쓰레기 문자열·만료 JWT 넷 다 `InvalidAuthenticationToken`이다(실측). `400 invalidRequest`를 토큰 만료로 의심하지 말 것. 앱도 401만 무효화 후 1회 재시도하고 E-0451로 끝내므로, 로그의 `Graph 호출 실패(400)` + E-1101 조합은 토큰과 무관하다.
 - 반입 검증 절차(dind 버전별 확인, 벤치마크 함정, gzip ISIZE 측정, 최소 비용 검증 이미지)는 `/mnt/c/Project/반입가이드.md`.
-- distribution 규격상 **저장소명은 소문자 강제**다(`ACME/cc-sb` 푸시 시 `repository name must be lowercase`) — 대소문자 차이는 **태그에서만** 가능하다. dev-ncr-sb 실측(2026-08-20): 태그 1217건 중 대문자 포함 13건(전부 `-SNAPSHOT`), 소문자로 접었을 때 충돌 쌍 0건.
+- distribution 규격상 **저장소명은 소문자 강제**다(`ACME/cc-sb` 푸시 시 `repository name must be lowercase`) — 대소문자 차이는 **태그에서만** 가능하다. 사내 NCR 실측(2026-08-20): 태그 1217건 중 대문자 포함 13건(전부 `-SNAPSHOT`), 소문자로 접었을 때 충돌 쌍 0건.
 
 # 커밋 규칙
 

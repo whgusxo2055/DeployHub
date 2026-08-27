@@ -123,7 +123,7 @@ class NcrRegistryClientTest {
 
     @Test
     void 토큰_응답이_text_plain이고_미지의_필드가_있어도_파싱한다() {
-        // dev-ncr-sb 실측: NCR은 JSON을 담고도 Content-Type을 text/plain으로 주고,
+        // 사내 NCR 실측: NCR은 JSON을 담고도 Content-Type을 text/plain으로 주고,
         // 본문에 expires_in/issued_at을 함께 넣는다. 이 테스트가 없던 동안 나머지
         // 목킹이 전부 APPLICATION_JSON이라 실연동에서만 UnknownContentTypeException이 났다.
         server.expect(requestTo("https://ncr.example.com/v2/repo/manifests/v1"))

@@ -71,7 +71,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
     private static final boolean USE_REAL_NCR = System.getenv("NCR_TEST_IMAGE_TAG") != null;
 
     // 로컬 registry:2의 alpine은 11MB라 60초면 충분하지만, 실 NCR의 이미지는 수 GB다
-    // (dev-ncr-sb 실측: 4.5GB짜리 OCI index가 172초). 실 NCR 모드에서만 넉넉히 잡는다 —
+    // (사내 NCR 실측: 4.5GB짜리 OCI index가 172초). 실 NCR 모드에서만 넉넉히 잡는다 —
     // 로컬 모드 타임아웃을 같이 늘리면 진짜 멈춤을 60초가 아니라 15분 뒤에 알게 된다.
     private static final Duration DONE_TIMEOUT = Duration.ofSeconds(USE_REAL_NCR ? 900 : 60);
     private static final int PROCESS_TIMEOUT_SECONDS = USE_REAL_NCR ? 900 : 60;
@@ -120,7 +120,7 @@ class PackageJobDownloadFlowIntegrationTest extends MySqlContainerSupport {
         // --format v2s2로 밀어 넣는 게 중요하다. alpine 원본은 OCI 형식이라 그대로 시딩하면
         // oci-archive: 목적지에서 변환이 일어나지 않아, --preserve-digests가 빠져도 digest가
         // 우연히 일치한다(= 아래 digest 단언이 아무것도 못 잡는 가짜 안전망이 된다).
-        // dev-ncr-sb 실물도 12개 중 9개가 docker schema2라 이쪽이 실제 구성에 가깝다.
+        // 사내 NCR 실물도 12개 중 9개가 docker schema2라 이쪽이 실제 구성에 가깝다.
         runProcess(
                 "skopeo",
                 "copy",
